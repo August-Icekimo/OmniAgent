@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  gateway:
+    build: ./gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=omni_agent
+      - POSTGRES_USER=omni
+      - POSTGRES_PASSWORD=changeme
+      - LINE_CHANNEL_SECRET=dummy_secret_for_test
+      - BLUEBUBBLES_PASSWORD=dummy_password
+      - BRAIN_URL=http://brain:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=omni
+      - POSTGRES_PASSWORD=changeme
+      - POSTGRES_DB=omni_agent
+    volumes:
+      - ./memory/postgres:/var/lib/postgresql/data
+      - ./db/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omni -d omni_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
