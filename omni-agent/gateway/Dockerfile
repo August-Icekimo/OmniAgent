@@ -1,12 +1,17 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
-COPY go.mod go.sum* ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -o /gateway ./cmd/server/main.go
 
-FROM gcr.io/distroless/static-debian12
-COPY --from=builder /server /server
-ENTRYPOINT ["/server"]
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /root/
+COPY --from=builder /gateway .
+
+EXPOSE 8080
+ENTRYPOINT ["./gateway"]
