@@ -1,120 +1,80 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
-	"time"
 
-	"github.com/google/uuid"
 	"omni-agent/gateway/internal/model"
-	"omni-agent/gateway/internal/queue"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type BlueBubblesHandler struct {
-	password string
-	repo     *queue.Repository
+type bluebubblesWebhookBody struct {
+	Type string `json:"type"`
+	Data struct {
+		Text  string `json:"text"`
+		Chats []struct {
+			ChatIdentifier string `json:"chatIdentifier"`
+		} `json:"chats"`
+	} `json:"data"`
 }
 
-func NewBlueBubblesHandler(repo *queue.Repository) *BlueBubblesHandler {
-	// Not enforcing BLUEBUBBLES_PASSWORD failure on boot, just return 503 from handler if missing
-	password := os.Getenv("BLUEBUBBLES_PASSWORD")
-	return &BlueBubblesHandler{
-		password: password,
-		repo:     repo,
-	}
-}
+func BlueBubblesWebhook(db *pgxpool.Pool) gin.HandlerFunc {
+	expectedPassword := os.Getenv("BLUEBUBBLES_PASSWORD")
 
-// Approximate BlueBubbles event struct
-type BlueBubblesPayload struct {
-	Type string                 `json:"type"`
-	Data map[string]interface{} `json:"data"`
-}
-
-func (h *BlueBubblesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.password == "" {
-		slog.Error("BLUEBUBBLES_PASSWORD not configured")
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	passQuery := r.URL.Query().Get("password")
-	if passQuery != h.password {
-		slog.Warn("Invalid BlueBubbles password")
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		slog.Error("Failed to read body", "error", err)
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	var payload BlueBubblesPayload
-	if err := json.Unmarshal(body, &payload); err != nil {
-		slog.Error("Failed to parse BlueBubbles body", "error", err)
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	// Immediate 200 per standard webhook procedure
-	w.WriteHeader(http.StatusOK)
-
-	go h.processEvent(payload, body)
-}
-
-func (h *BlueBubblesHandler) processEvent(payload BlueBubblesPayload, rawBody []byte) {
-	if payload.Type != "new-message" {
-		slog.Debug("Ignoring non-message BlueBubbles event", "type", payload.Type)
-		return
-	}
-
-	// Try extracting standard fields
-	var userID, text string
-	msgType := "other"
-
-	// Simplified heuristic extraction of Imessage info; in a real app would strictly decode the nested structs
-	if chats, ok := payload.Data["chats"].([]interface{}); ok && len(chats) > 0 {
-		if c, ok2 := chats[0].(map[string]interface{}); ok2 {
-			if address, ok3 := c["chatIdentifier"].(string); ok3 {
-				userID = address
-			}
+	return func(c *gin.Context) {
+		password := c.Query("password")
+		if password == "" || password != expectedPassword {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
 		}
-	}
-	if msgText, ok := payload.Data["text"].(string); ok {
-		text = msgText
-		msgType = "text"
-	}
 
-	// Fallback ID if couldn't parse properly
-	if userID == "" {
-		userID = "unknown"
-	}
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "read body error"})
+			return
+		}
 
-	stdMsg := model.StandardMessage{
-		ID:          uuid.New(),
-		Platform:    "imessage",
-		UserID:      userID,
-		Text:        text,
-		MessageType: msgType,
-		RawPayload:  rawBody,
-		ReceivedAt:  time.Now(),
-	}
+		var payload bluebubblesWebhookBody
+		if err := json.Unmarshal(body, &payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
+			return
+		}
 
-	slog.Info("BlueBubbles message received", "platform", "imessage", "user_id", userID)
+		if payload.Type != "new-message" {
+			// Silently ignore non-new-message events
+			c.JSON(http.StatusOK, gin.H{"status": "ignored"})
+			return
+		}
 
-	if err := h.repo.Enqueue(context.Background(), &stdMsg, 5); err != nil {
-		slog.Error("Failed to enqueue BlueBubbles message", "error", err)
+		userId := ""
+		if len(payload.Data.Chats) > 0 {
+			userId = payload.Data.Chats[0].ChatIdentifier
+		}
+
+		msgId := uuid.New().String()
+		stdMsg := model.StandardMessage{
+			ID:          msgId,
+			Platform:    "imessage",
+			UserID:      userId,
+			MessageType: "text",
+			Text:        payload.Data.Text,
+		}
+
+		payloadJSON, _ := json.Marshal(stdMsg)
+
+		_, err = db.Exec(c.Request.Context(),
+			"INSERT INTO message_queue (id, payload, priority, status) VALUES ($1, $2, $3, $4)",
+			msgId, payloadJSON, 5, "pending")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	}
 }

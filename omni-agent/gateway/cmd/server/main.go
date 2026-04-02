@@ -2,135 +2,94 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"log/slog"
+	"log"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	_ "github.com/lib/pq"
 
 	"omni-agent/gateway/internal/forwarder"
 	"omni-agent/gateway/internal/handler"
-	"omni-agent/gateway/internal/queue"
 	"omni-agent/gateway/internal/stress"
+
+	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	// 1. Structured Logging Setup
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
-	slog.SetDefault(logger)
-	slog.Info("Starting Omni-Agent Gateway...")
+	_ = godotenv.Load() // ignore error, as .env might not exist in docker container, we use env vars directly
 
-	// 2. Database Connection
-	host := getEnvOrDefault("POSTGRES_HOST", "postgres")
-	port := getEnvOrDefault("POSTGRES_PORT", "5432")
-	user := getEnvOrDefault("POSTGRES_USER", "omni")
-	pass := getEnvOrDefault("POSTGRES_PASSWORD", "changeme")
-	dbname := getEnvOrDefault("POSTGRES_DB", "omni_agent")
+	fmt.Println("Starting Omni-Agent Gateway...")
 
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", 
-		host, port, user, pass, dbname)
+	dbUrl := fmt.Sprintf("postgres://%s:%s@%s:%s/%s",
+		os.Getenv("POSTGRES_USER"),
+		os.Getenv("POSTGRES_PASSWORD"),
+		os.Getenv("POSTGRES_HOST"),
+		os.Getenv("POSTGRES_PORT"),
+		os.Getenv("POSTGRES_DB"),
+	)
 
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		slog.Error("Failed to open db", "error", err)
-		os.Exit(1)
+	var db *pgxpool.Pool
+	var err error
+	// Retry loop for DB connection as required by TC-01-C
+	for {
+		db, err = pgxpool.New(context.Background(), dbUrl)
+		if err == nil {
+			err = db.Ping(context.Background())
+		}
+		if err == nil {
+			fmt.Println("PostgreSQL connected successfully")
+			break
+		}
+		fmt.Println("DB not ready, retrying in 1s...")
+		time.Sleep(1 * time.Second)
 	}
 	defer db.Close()
 
-	// Wait up to 30s for DB to be available during startup
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Start Background Worker
+	stress.StartStressManager(db)
+	forwarder.StartBrainForwarder(db)
+
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
 	
-	for {
-		err = db.PingContext(ctx)
-		if err == nil {
-			break
+	// Custom logger that outputs valid JSON and doesn't log message body or webhook body
+	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+		return fmt.Sprintf("{\"method\":\"%s\",\"path\":\"%s\",\"status\":%d,\"latency\":\"%s\"}\n",
+			param.Method, param.Path, param.StatusCode, param.Latency)
+	}))
+	r.Use(gin.Recovery())
+
+	// Health check endpoint
+	r.GET("/health", func(c *gin.Context) {
+		var depth int
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		
+		err := db.QueryRow(ctx, "SELECT COUNT(*) FROM message_queue WHERE status = 'pending'").Scan(&depth)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "error",
+				"db":     "down",
+			})
+			return
 		}
-		if ctx.Err() != nil {
-			slog.Error("Database unreachable, terminating...", "error", err)
-			os.Exit(1)
-		}
-		slog.Warn("DB not ready, retrying in 1s...", "error", err)
-		time.Sleep(1 * time.Second)
+		c.JSON(http.StatusOK, gin.H{
+			"status":      "ok",
+			"queue_depth": depth,
+		})
+	})
+
+	r.POST("/webhook/line", handler.LineWebhook(db))
+	r.POST("/webhook/bluebubbles", handler.BlueBubblesWebhook(db))
+
+	port := os.Getenv("GATEWAY_PORT")
+	if port == "" {
+		port = "8080"
 	}
-	slog.Info("PostgreSQL connected successfully")
-
-	// 3. Components Initialization
-	repo := queue.NewRepository(db)
-	
-	lineHandler := handler.NewLineHandler(repo)
-	bbHandler := handler.NewBlueBubblesHandler(repo)
-	healthHandler := handler.NewHealthHandler(db)
-
-	stressManager := stress.NewManager(db, 30*time.Second)
-	brainForwarder := forwarder.NewBrainForwarder(repo)
-
-	// 4. Background Services
-	sysCtx, sysCancel := context.WithCancel(context.Background())
-	defer sysCancel()
-
-	stressManager.Start(sysCtx)
-	if brainForwarder != nil {
-		brainForwarder.Start(sysCtx)
+	log.Printf("Gateway listening on :%s\n", port)
+	if err := r.Run(":" + port); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
 	}
-
-	// 5. Router and Server
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
-	// Log request middleware simplified for JSON structure could go here if needed
-
-	r.Get("/health", healthHandler.ServeHTTP)
-	r.Post("/webhook/line", lineHandler.ServeHTTP)
-	r.Post("/webhook/bluebubbles", bbHandler.ServeHTTP)
-
-	portEnv := getEnvOrDefault("GATEWAY_PORT", "8080")
-	server := &http.Server{
-		Addr:    ":" + portEnv,
-		Handler: r,
-	}
-
-	// Execute Server
-	go func() {
-		slog.Info("HTTP server running", "port", portEnv)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("HTTP server failed", "error", err)
-			os.Exit(1)
-		}
-	}()
-
-	// 6. Graceful Shutdown Wait
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	slog.Info("Shutting down Gateway gracefully...")
-	sysCancel()
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		slog.Error("Server forced to shutdown", "error", err)
-	}
-
-	slog.Info("Gateway exited")
-}
-
-func getEnvOrDefault(key, fallback string) string {
-	if val, ok := os.LookupEnv(key); ok && val != "" {
-		return val
-	}
-	return fallback
 }
