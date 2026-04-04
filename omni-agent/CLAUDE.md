@@ -15,7 +15,7 @@
 
 ---
 
-## 1. 系統架構：四層解耦設計
+## 1. 系統架構：三層架構
 
 ```
 外部世界
@@ -28,23 +28,19 @@
 │  · 非同步回覆（應對 LINE 3 秒 timeout） │
 │  · 內建 StressManager 小腦袋機制        │
 └───────────────┬─────────────────────────┘
-                │ HTTP / gRPC (StandardMessage)
+                │ HTTP (StandardMessage JSON)
                 ▼
 ┌─────────────────────────────────────────┐
 │  The Brain — Python FastAPI + LangGraph │
 │  · 對話狀態管理（LangGraph stateful）   │
 │  · SoulLoader：組裝 system prompt       │
+│  · ModelRouter：原廠 SDK 智慧路由       │
+│    ├─ Claude (anthropic SDK + cache)    │
+│    ├─ Gemini (google-genai SDK + cache) │
+│    └─ Local MLX (openai SDK → Mac Mini) │
 │  · MCP Skills 呼叫                      │
 │  · RAG 記憶檢索（pgvector）             │
 └───────────────┬─────────────────────────┘
-                │ OpenAI-format API
-                ▼
-┌─────────────────────────────────────────┐
-│  The Router — LiteLLM (獨立容器)        │
-│  · 簡單任務 → Mac Mini MLX (本地)       │
-│  · 複雜視覺任務 → Gemini API (雲端)     │
-│  · 過載時 → 升級更強模型（小腦袋授權）  │
-└─────────────────────────────────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────┐
@@ -131,7 +127,7 @@ StressCritical → 強制熔斷 + 主帳號警報
   費用敏感或任務不緊急時，回覆帶有個性的等待訊息，延遲低優先級任務，將過載事件寫入 `stress_logs`（JSONB，含 mood 欄位）。
 
 - **策略 B — 老闆加錢（Model Escalation）：**
-  任務重要或用戶等不了時，透過 LiteLLM 切換更強模型，依 `ApprovalMode` 決定是否需要主帳號授權（Auto / SemiAuto / Manual）。
+  任務重要或用戶等不了時，透過 ModelRouter 切換更強模型，依 `ApprovalMode` 決定是否需要主帳號授權（Auto / SemiAuto / Manual）。
 
 **靈魂回饋迴路：** stress_logs 的歷史資料由 `soul/loader.py` 讀取，注入 SOUL.md 的動態區段，讓 LLM 擁有「自我歷史感」（例如：「上週五我過載了三次」）。
 
@@ -234,10 +230,16 @@ omni-agent/
 │   ├── main.py
 │   ├── agent/
 │   │   ├── graph.py              # LangGraph state machine
-│   │   ├── prompts/
-│   │   │   ├── system.py
-│   │   │   └── tools.py
-│   │   └── router.py
+│   │   └── prompts/
+│   │       ├── system.py
+│   │       └── tools.py
+│   ├── llm/                      # ModelRouter + 原廠 SDK
+│   │   ├── __init__.py
+│   │   ├── base.py               # ModelClient ABC
+│   │   ├── claude_client.py      # anthropic SDK + prompt caching
+│   │   ├── gemini_client.py      # google-genai SDK + context caching
+│   │   ├── local_client.py       # openai SDK → Mac Mini MLX
+│   │   └── router.py             # 路由決策 + 模型升級策略
 │   ├── memory/
 │   │   ├── short_term.py         # conversations table
 │   │   └── long_term.py          # pgvector RAG
@@ -250,10 +252,6 @@ omni-agent/
 │       └── templates/
 │           └── context.md.jinja
 │
-├── router/                       # The Router (LiteLLM)
-│   ├── Dockerfile
-│   └── config.yaml               # 維持 YAML，不進 DB
-│
 └── docs/
     ├── architecture.md
     └── SECURITY.md
@@ -265,10 +263,10 @@ omni-agent/
 
 | Phase | 目標 | 關鍵產出 |
 |---|---|---|
-| **1** | Go Gateway + Queue | `StandardMessage{}`, Webhook 驗證, `StressManager` 骨架, PG Queue |
-| **2** | Python Brain + LiteLLM | FastAPI 端點, LangGraph 基礎, `SoulLoader`, LiteLLM 路由 |
+| **1** ✅ | Go Gateway + Queue | `StandardMessage{}`, Webhook 驗證, `StressManager` 骨架, PG Queue |
+| **2** | Python Brain + 原廠 SDK | FastAPI 端點, LangGraph 基礎, `SoulLoader`, `ModelClient` ABC + Claude/Gemini/Local adapter, prompt/context caching |
 | **3** | 記憶系統 | conversations table, pgvector RAG, `StressManager` 寫日記 |
-| **4** | MCP Skills + 模型升級 | Function Calling, Proxmox/WoL 工具, `Model Escalation` 完整實作 |
+| **4** | MCP Skills + 模型升級 | Function Calling, Proxmox/WoL 工具, `ModelRouter` 完整 escalation 實作 |
 
 ---
 

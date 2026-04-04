@@ -1,0 +1,22 @@
+# FastAPI + ASGI server
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+
+# LLM SDKs — 原廠直連
+anthropic>=0.52.0
+google-genai>=1.12.0
+openai>=1.78.0
+
+# Database (Phase 3 預備)
+asyncpg>=0.30.0
+pgvector>=0.3.0
+
+# Template rendering for SoulLoader
+jinja2>=3.1.6
+
+# LangGraph (Phase 2 後半)
+langgraph>=0.4.0
+
+# Utilities
+pydantic>=2.11.0
+python-dotenv>=1.1.0
