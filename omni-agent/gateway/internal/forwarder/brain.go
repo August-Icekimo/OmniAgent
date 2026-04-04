@@ -18,8 +18,10 @@ func StartBrainForwarder(db *pgxpool.Pool) {
 		return
 	}
 
+	log.Printf("Starting Brain Forwarder with URL: %s", brainURL)
 	ticker := time.NewTicker(1 * time.Second)
 	go func() {
+		log.Printf("Brain Forwarder loop started.")
 		for range ticker.C {
 			processNextMessage(db, brainURL)
 		}
@@ -27,6 +29,7 @@ func StartBrainForwarder(db *pgxpool.Pool) {
 }
 
 func processNextMessage(db *pgxpool.Pool, brainURL string) {
+	log.Printf("Checking for next message to process...")
 	ctx := context.Background()
 	tx, err := db.Begin(ctx)
 	if err != nil {
@@ -46,9 +49,11 @@ func processNextMessage(db *pgxpool.Pool, brainURL string) {
 	`).Scan(&msgId, &payload)
 
 	if err != nil {
-		// no rows or error
+		// no rows or message check failed
 		return
 	}
+
+	log.Printf("Found message %s, sending to %s", msgId, brainURL)
 
 	// Set to processing
 	_, err = tx.Exec(ctx, "UPDATE message_queue SET status = 'processing', locked_at = NOW() WHERE id = $1", msgId)
@@ -62,12 +67,22 @@ func processNextMessage(db *pgxpool.Pool, brainURL string) {
 	// We make it simple for Phase 1: hold the lock.
 	
 	resp, err := http.Post(brainURL, "application/json", bytes.NewReader(payload))
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
+		log.Printf("Error sending message %s to brain: %v", msgId, err)
+		_, _ = tx.Exec(ctx, "UPDATE message_queue SET status = 'failed' WHERE id = $1", msgId)
+		tx.Commit(ctx)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Brain returned non-200 status for message %s: %d", msgId, resp.StatusCode)
 		_, _ = tx.Exec(ctx, "UPDATE message_queue SET status = 'failed' WHERE id = $1", msgId)
 		tx.Commit(ctx)
 		return
 	}
 	
+	log.Printf("Successfully processed message %s by brain", msgId)
 	_, _ = tx.Exec(ctx, "UPDATE message_queue SET status = 'done' WHERE id = $1", msgId)
 	tx.Commit(ctx)
 }

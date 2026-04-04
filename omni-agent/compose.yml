@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   postgres:
-    image: pgvector/pgvector:pg18-trixie
+    image: docker.io/pgvector/pgvector:pg18-trixie
     container_name: omni-agent-postgres-1
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-omni}
@@ -14,7 +12,7 @@ services:
       - ./memory/postgres:/var/lib/postgresql
       - ./db/migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omni} -d ${POSTGRES_DB:-omni_agent}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omni} -d ${POSTGRES_DB:-omni_agent}" ]
       interval: 3s
       timeout: 5s
       retries: 5
@@ -28,6 +26,19 @@ services:
       - .env
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_started
+    restart: unless-stopped
+
+  brain:
+    build:
+      context: ./brain
+    container_name: omni-agent-brain-1
+    env_file:
+      - .env
+    ports:
+      - "${BRAIN_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_started
