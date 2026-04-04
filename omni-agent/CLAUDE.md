@@ -11,7 +11,7 @@
 
 部署環境：
 - **Debian 13** + Podman 容器（主力運算節點）
-- **Mac Mini M4** + LiteLLM-MLX（本地 LLM 推論）
+- **Mac Mini M4** + mlx-lm（本地 LLM 推論，OpenAI-compatible API）
 
 ---
 
@@ -264,8 +264,8 @@ omni-agent/
 | Phase | 目標 | 關鍵產出 |
 |---|---|---|
 | **1** ✅ | Go Gateway + Queue | `StandardMessage{}`, Webhook 驗證, `StressManager` 骨架, PG Queue |
-| **2** | Python Brain + 原廠 SDK | FastAPI 端點, LangGraph 基礎, `SoulLoader`, `ModelClient` ABC + Claude/Gemini/Local adapter, prompt/context caching |
-| **3** | 記憶系統 | conversations table, pgvector RAG, `StressManager` 寫日記 |
+| **2** ✅ | Python Brain + 原廠 SDK | FastAPI 端點, `ModelClient` ABC + Claude/Gemini/Local adapter, prompt/context caching, `ModelRouter` |
+| **3** | 記憶系統 + SoulLoader | conversations table, pgvector RAG, `SoulLoader` 讀 SOUL.md, `StressManager` 寫日記 |
 | **4** | MCP Skills + 模型升級 | Function Calling, Proxmox/WoL 工具, `ModelRouter` 完整 escalation 實作 |
 
 ---
