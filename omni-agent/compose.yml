@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg18-trixie
+    image: docker.io/pgvector/pgvector:pg18-trixie
     container_name: omni-agent-postgres-1
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-omni}
@@ -12,7 +12,7 @@ services:
       - ./memory/postgres:/var/lib/postgresql
       - ./db/migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omni} -d ${POSTGRES_DB:-omni_agent}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omni} -d ${POSTGRES_DB:-omni_agent}" ]
       interval: 3s
       timeout: 5s
       retries: 5

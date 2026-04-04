@@ -12,7 +12,55 @@ echo "🤖 建立 Omni-Agent 專案結構於：$TARGET"
 # ── 根目錄 ────────────────────────────────────────────
 mkdir -p "$TARGET"
 
-touch "$TARGET/compose.yml"
+# --- compose.yml ---
+cat > "$TARGET/compose.yml" << 'EOF'
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg18-trixie
+    container_name: omni-agent-postgres-1
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-omni}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-omni_agent}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./memory/postgres:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omni} -d ${POSTGRES_DB:-omni_agent}"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ./gateway
+    container_name: omni-agent-gateway-1
+    env_file:
+      - .env
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_started
+    restart: unless-stopped
+
+  brain:
+    build:
+      context: ./brain
+    container_name: omni-agent-brain-1
+    env_file:
+      - .env
+    ports:
+      - "${BRAIN_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_started
+    restart: unless-stopped
+EOF
+
 touch "$TARGET/.env.example"
 touch "$TARGET/.gitignore"
 
@@ -35,7 +83,22 @@ mkdir -p "$TARGET/gateway/internal/stress"
 mkdir -p "$TARGET/gateway/internal/queue"
 mkdir -p "$TARGET/gateway/internal/forwarder"
 
-touch "$TARGET/gateway/Dockerfile"
+# --- gateway/Dockerfile ---
+cat > "$TARGET/gateway/Dockerfile" << 'EOF'
+FROM docker.io/library/golang:1.23-alpine AS builder
+WORKDIR /app
+COPY go.mod ./
+# RUN go mod download
+COPY . .
+RUN go build -o gateway ./cmd/server/main.go
+
+FROM docker.io/library/alpine:latest
+WORKDIR /app
+COPY --from=builder /app/gateway .
+EXPOSE 8080
+ENTRYPOINT ["./gateway"]
+EOF
+
 touch "$TARGET/gateway/go.mod"
 touch "$TARGET/gateway/cmd/server/main.go"
 touch "$TARGET/gateway/internal/handler/line.go"
@@ -52,8 +115,33 @@ mkdir -p "$TARGET/brain/memory"
 mkdir -p "$TARGET/brain/skills"
 mkdir -p "$TARGET/brain/soul/templates"
 
-touch "$TARGET/brain/Dockerfile"
-touch "$TARGET/brain/requirements.txt"
+# --- brain/Dockerfile ---
+cat > "$TARGET/brain/Dockerfile" << 'EOF'
+FROM docker.io/library/python:3.13-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+EOF
+
+# --- brain/requirements.txt ---
+cat > "$TARGET/brain/requirements.txt" << 'EOF'
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+anthropic>=0.52.0
+google-genai>=1.12.0
+openai>=1.78.0
+asyncpg>=0.30.0
+pgvector>=0.3.0
+jinja2>=3.1.6
+langgraph>=0.4.0
+pydantic>=2.11.0
+python-dotenv>=1.1.0
+EOF
+
 touch "$TARGET/brain/main.py"
 
 # agent/（Phase 3 LangGraph）
@@ -136,7 +224,7 @@ MLX_BASE_URL=               # Local MLX, e.g. http://mac-mini.local:8080/v1
 MLX_MODEL=mlx-community/Meta-Llama-3.1-8B-Instruct-4bit
 
 # Brain
-BRAIN_URL=http://brain:8000
+BRAIN_URL=http://brain:8000/chat
 BRAIN_PORT=8000
 
 # Gateway
