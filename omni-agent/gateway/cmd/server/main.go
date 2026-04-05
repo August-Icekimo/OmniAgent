@@ -84,6 +84,18 @@ func main() {
 	r.POST("/webhook/line", handler.LineWebhook(db))
 	r.POST("/webhook/bluebubbles", handler.BlueBubblesWebhook(db))
 
+	tgToken := os.Getenv("TELEGRAM_BOT_TOKEN")
+	if tgToken == "" {
+		log.Println("TELEGRAM_BOT_TOKEN not set, Telegram webhook disabled")
+		r.POST("/webhook/telegram", func(c *gin.Context) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Telegram webhook disabled"})
+		})
+	} else {
+		log.Println("Telegram webhook handler registered")
+		r.POST("/webhook/telegram", handler.TelegramWebhook(db))
+	}
+
+
 	port := os.Getenv("GATEWAY_PORT")
 	if port == "" {
 		port = "8080"
