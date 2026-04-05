@@ -19,17 +19,33 @@ class ShortTermMemory:
             return
 
         try:
+            # Serialize each message dict to JSON string for jsonb[] column
+            serialized = [json.dumps(m, ensure_ascii=False) for m in messages]
+
             async with self.pool.acquire() as conn:
+                # Ensure user exists in family_members (FK constraint)
+                await conn.execute(
+                    """
+                    INSERT INTO family_members (line_id, name) VALUES ($1, $2)
+                    ON CONFLICT (line_id) DO NOTHING
+                    """,
+                    user_id, user_id
+                )
+
                 # Store the full conversation
                 await conn.execute(
-                    "INSERT INTO conversations (user_id, platform, messages) VALUES ($1, $2, $3)",
-                    user_id, platform, messages
+                    "INSERT INTO conversations (user_id, platform, messages) VALUES ($1, $2, $3::jsonb[])",
+                    user_id, platform, serialized
                 )
 
                 # Update memory index (lightweight summary) - accumulate history
                 key = f"memory_index:{user_id}"
                 row = await conn.fetchrow("SELECT value FROM home_context WHERE key = $1", key)
-                existing_summary = row['value'] if row else []
+
+                existing_summary = []
+                if row and row['value']:
+                    v = row['value']
+                    existing_summary = json.loads(v) if isinstance(v, str) else v
 
                 new_entries = []
                 for msg in messages:
@@ -44,10 +60,10 @@ class ShortTermMemory:
                     await conn.execute(
                         """
                         INSERT INTO home_context (key, value)
-                        VALUES ($1, $2)
+                        VALUES ($1, $2::jsonb)
                         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
                         """,
-                        key, updated_summary
+                        key, json.dumps(updated_summary, ensure_ascii=False)
                     )
         except Exception as e:
             logger.error(f"Failed to save short-term memory for user {user_id}: {e}")
@@ -70,7 +86,12 @@ class ShortTermMemory:
                 history = []
                 # Rows are newest first, we want them oldest first
                 for row in reversed(rows):
-                    history.extend(row['messages'])
+                    for msg in row['messages']:
+                        # jsonb[] elements may come back as strings
+                        if isinstance(msg, str):
+                            history.append(json.loads(msg))
+                        else:
+                            history.append(msg)
                 return history
         except Exception as e:
             logger.error(f"Failed to load short-term memory for user {user_id}: {e}")

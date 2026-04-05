@@ -1,51 +1,49 @@
 import asyncio
 import logging
 import os
-import httpx
-import asyncpg
 from typing import List, Optional
 
+import asyncpg
+from google import genai
+from google.genai import types as genai_types
+
 logger = logging.getLogger("brain.memory.long_term")
+
+# Gemini Embedding model — native output is 3072, we truncate to 768
+# to fit within pgvector HNSW index limit (max 2000 dims).
+EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_DIMS = 768
+
 
 class LongTermMemory:
     def __init__(self, pool: asyncpg.Pool, router=None):
         self.pool = pool
         self.router = router
-        self.voyage_api_key = os.getenv("VOYAGE_API_KEY")
-        self.voyage_url = "https://api.voyageai.com/v1/embeddings"
+        api_key = os.getenv("GEMINI_API_KEY")
+        if api_key:
+            self._genai_client = genai.Client(api_key=api_key)
+        else:
+            self._genai_client = None
+            logger.warning("GEMINI_API_KEY not set — long-term memory embedding disabled")
 
     async def _get_embedding(self, text: str) -> List[float]:
-        """Gets embedding from Voyage AI with retry logic."""
-        if not self.voyage_api_key:
-            logger.error("VOYAGE_API_KEY not found in environment")
+        """Gets embedding from Google Gemini Embedding API."""
+        if not self._genai_client:
+            logger.error("Gemini client not available for embedding")
             return []
 
-        max_retries = 3
-        async with httpx.AsyncClient() as client:
-            for attempt in range(max_retries):
-                payload = {
-                    "input": [text],
-                    "model": "voyage-3"
-                }
-                headers = {
-                    "Authorization": f"Bearer {self.voyage_api_key}",
-                    "Content-Type": "application/json"
-                }
-                try:
-                    resp = await client.post(self.voyage_url, json=payload, headers=headers, timeout=10.0)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        return data['data'][0]['embedding']
-                    elif resp.status_code >= 500 or resp.status_code == 429:
-                        logger.warning(f"Voyage AI API error {resp.status_code}, retrying ({attempt+1}/{max_retries})...")
-                        await asyncio.sleep(2 ** attempt)
-                    else:
-                        logger.error(f"Voyage AI embedding failed: {resp.status_code} - {resp.text}")
-                        break
-                except Exception as e:
-                    logger.error(f"Error calling Voyage AI: {e}")
-                    await asyncio.sleep(2 ** attempt)
-        return []
+        try:
+            result = self._genai_client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=text,
+                config=genai_types.EmbedContentConfig(
+                    output_dimensionality=EMBEDDING_DIMS,
+                ),
+            )
+            return list(result.embeddings[0].values)
+        except Exception as e:
+            logger.error(f"Gemini embedding failed: {e}")
+            return []
 
     async def _summarize_conversation(self, messages: List[dict]) -> str:
         """Uses LLM (Gemini) to summarize the conversation round."""
@@ -68,7 +66,14 @@ class LongTermMemory:
         try:
             # We want to force Gemini for this as per requirement
             response = await self.router.chat(llm_messages, system_prompt=system_prompt, provider="gemini")
-            return response.content.strip()
+            if response and response.content:
+                return response.content.strip()
+            else:
+                logger.warning("Summarization returned empty content, using fallback")
+                for m in reversed(messages):
+                    if m['role'] == 'user':
+                        return m['content']
+                return ""
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
             # Fallback to last user message
@@ -94,12 +99,15 @@ class LongTermMemory:
             return
 
         try:
+            # Convert embedding to pgvector-compatible string format
+            embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+
             async with self.pool.acquire() as conn:
                 await conn.execute(
-                    "INSERT INTO memory_embeddings (user_id, content, embedding) VALUES ($1, $2, $3)",
-                    user_id, summary, embedding
+                    "INSERT INTO memory_embeddings (user_id, content, embedding) VALUES ($1, $2, $3::vector)",
+                    user_id, summary, embedding_str
                 )
-            logger.info(f"Stored long-term memory for user {user_id}")
+            logger.info(f"Stored long-term memory for user {user_id}, dims={len(embedding)}")
         except Exception as e:
             logger.error(f"Failed to store long-term memory: {e}")
 
@@ -115,6 +123,8 @@ class LongTermMemory:
             return []
 
         try:
+            embedding_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
+
             async with self.pool.acquire() as conn:
                 # Using cosine similarity operator <=>
                 # pgvector 0.8+ uses <=> for cosine distance
@@ -125,7 +135,7 @@ class LongTermMemory:
                     ORDER BY embedding <=> $2::vector ASC
                     LIMIT $3
                     """,
-                    user_id, query_embedding, limit
+                    user_id, embedding_str, limit
                 )
                 return [row['content'] for row in rows]
         except Exception as e:

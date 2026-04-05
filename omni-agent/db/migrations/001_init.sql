@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id    TEXT NOT NULL,
     content    TEXT NOT NULL,
-    embedding  vector(1536),
+    embedding  vector(768),
     metadata   JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
