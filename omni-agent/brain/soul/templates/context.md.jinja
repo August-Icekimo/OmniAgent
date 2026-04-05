@@ -1,0 +1,25 @@
+{% if recent_stress_logs %}
+## My Recent State
+{% for log in recent_stress_logs %}
+- {{ log.created_at.strftime('%Y-%m-%d %H:%M') }}：{{ log.level }} 壓力，{{ log.action_taken }}{% if log.mood %}（心情：{{ log.mood }}）{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if home_events %}
+## Family Pulse
+{% for event in home_events %}
+- {{ event }}
+{% endfor %}
+{% endif %}
+
+{% if memory_index %}
+## Recent Memory
+{% for entry in memory_index %}
+- {{ entry }}
+{% endfor %}
+{% endif %}
+
+{% if today_context %}
+## Today
+{{ today_context }}
+{% endif %}
