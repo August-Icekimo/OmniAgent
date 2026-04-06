@@ -45,3 +45,14 @@ services:
       postgres:
         condition: service_started
     restart: unless-stopped
+
+  skills:
+    build:
+      context: ./skills
+    container_name: omni-agent-skills-1
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_started
+    restart: unless-stopped
