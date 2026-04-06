@@ -51,6 +51,38 @@ func main() {
 	stress.StartStressManager(db)
 	forwarder.StartBrainForwarder(db)
 
+	// Bootstrap Admin
+	adminChatID := os.Getenv("TELEGRAM_ADMIN_CHAT_ID")
+	if adminChatID != "" {
+		var adminExists bool
+		err = db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM users WHERE role = 'admin')").Scan(&adminExists)
+		if err != nil {
+			log.Printf("Error checking for admin: %v", err)
+		} else if !adminExists {
+			log.Println("No admin found, bootstrapping from TELEGRAM_ADMIN_CHAT_ID...")
+			var userID string
+			err = db.QueryRow(context.Background(),
+				"INSERT INTO users (name, role, access_level) VALUES ($1, $2, $3) RETURNING id",
+				"Iceman", "admin", 10).Scan(&userID)
+			if err != nil {
+				log.Printf("Failed to create admin user: %v", err)
+			} else {
+				_, err = db.Exec(context.Background(),
+					"INSERT INTO telegram_accounts (chat_id, user_id) VALUES ($1, $2)",
+					adminChatID, userID)
+				if err != nil {
+					log.Printf("Failed to associate telegram admin: %v", err)
+				} else {
+					log.Printf("Admin bootstrapped successfully with chat_id %s", adminChatID)
+				}
+			}
+		} else {
+			log.Println("Admin already exists, skipping bootstrap")
+		}
+	} else {
+		log.Println("WARNING: TELEGRAM_ADMIN_CHAT_ID not set, no admin will be bootstrapped")
+	}
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	
