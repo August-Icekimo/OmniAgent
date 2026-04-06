@@ -23,14 +23,8 @@ class ShortTermMemory:
             serialized = [json.dumps(m, ensure_ascii=False) for m in messages]
 
             async with self.pool.acquire() as conn:
-                # Ensure user exists in family_members (FK constraint)
-                await conn.execute(
-                    """
-                    INSERT INTO family_members (line_id, name) VALUES ($1, $2)
-                    ON CONFLICT (line_id) DO NOTHING
-                    """,
-                    user_id, user_id
-                )
+                # Ensure user exists (Gateway already handles this)
+                # await conn.execute("...")
 
                 # Store the full conversation
                 await conn.execute(

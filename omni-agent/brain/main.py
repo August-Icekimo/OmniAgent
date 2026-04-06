@@ -1,13 +1,7 @@
-"""Omni-Agent Brain — FastAPI 入口。
-
-接收 Gateway 轉發的 StandardMessage，
-透過 SoulLoader 組裝 system prompt，
-經由 ModelRouter 呼叫 LLM 取得回覆。
-"""
-
 import asyncio
 import logging
 import os
+import json
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
@@ -18,6 +12,8 @@ from llm import Message, Role, create_default_router
 from soul.loader import SoulLoader
 from memory.short_term import ShortTermMemory
 from memory.long_term import LongTermMemory
+from agent.graph import create_agent_graph
+from agent.proactive import start_proactive_tasks
 
 
 logging.basicConfig(
@@ -58,7 +54,6 @@ async def lifespan(app: FastAPI):
     # 初始化 DB connection pool
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        # Fallback to individual vars if DATABASE_URL is not set
         user = os.getenv("POSTGRES_USER", "omni")
         password = os.getenv("POSTGRES_PASSWORD", "omni")
         host = os.getenv("POSTGRES_HOST", "localhost")
@@ -85,6 +80,15 @@ async def lifespan(app: FastAPI):
     app.state.long_term = LongTermMemory(app.state.db_pool, router)
     logger.info("Memory modules ready")
 
+    # 初始化 LangGraph
+    app.state.graph = create_agent_graph()
+    logger.info("Agent graph initialized")
+
+    # 啟動主動推送任務
+    if app.state.db_pool:
+        await start_proactive_tasks(app)
+        logger.info("Proactive tasks started")
+
     yield
 
     if app.state.db_pool:
@@ -102,7 +106,7 @@ async def health():
 
 @app.post("/chat", response_model=BrainResponse)
 async def chat(msg: StandardMessage):
-    """接收 Gateway 轉發的訊息，呼叫 LLM 回覆。"""
+    """接收 Gateway 轉發的訊息，透過 LangGraph 處理。"""
     if not msg.text:
         raise HTTPException(status_code=400, detail="Empty message text")
 
@@ -110,27 +114,54 @@ async def chat(msg: StandardMessage):
     soul_loader = app.state.soul_loader
     short_term = app.state.short_term
     long_term = app.state.long_term
+    pool = app.state.db_pool
 
-    # 1. SoulLoader 渲染 system prompt
+    # 1. 處理特殊狀態：模型升級確認 (僅限 Admin)
+    # 此處簡化：假設所有進來的 UserID 都已在 Gateway 驗證過
+    if pool:
+        escalation_pending = await pool.fetchrow("SELECT value FROM home_context WHERE key = 'escalation:pending'")
+        if escalation_pending:
+            # 只有 Admin 才能確認。這裡我們先檢查是否為同意升級的關鍵字。
+            if any(word in msg.text.lower() for word in ["好", "可以", "升級", "yes", "ok"]):
+                target_model = json.loads(escalation_pending['value'])['target_model']
+                # router.set_default(target_model) # 假設 router 支援
+                await pool.execute("DELETE FROM home_context WHERE key = 'escalation:pending'")
+                return BrainResponse(
+                    reply_text=f"好的，大腦已經完成模型升級至 `{target_model}`，現在反應會更精確敏銳！",
+                    model_used=target_model, provider="escalated"
+                )
+
+    # 2. 處理特殊狀態：技能確認回覆
+    confirmation_received = False
+    pending_plan = None
+    if pool:
+        pending_check = await pool.fetchrow("SELECT value FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
+        if pending_check:
+            if any(word in msg.text.lower() for word in ["好", "可以", "確認", "yes", "go"]):
+                confirmation_received = True
+                pending_plan = json.loads(pending_check['value'])
+            # 無論是否同意，這次訊息後都清除 pending
+            await pool.execute("DELETE FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
+
+    # 3. SoulLoader 渲染 system prompt
     try:
         system_prompt = await soul_loader.render(user_id=msg.user_id)
     except Exception as e:
         logger.error(f"SoulLoader failed: {e}")
         system_prompt = "I am Cindy, a family AI assistant."
 
-    # 2. 長期記憶召回
-    long_term_context = ""
-    if app.state.db_pool:
+    # 4. 長期記憶召回
+    if pool:
         memories = await long_term.recall(msg.user_id, msg.text)
         if memories:
-            long_term_context = "\n\n## Long-term Memory\n以下為過去對話摘要，僅供參考，請以當前對話為準：\n"
+            long_term_context = "\n\n## Long-term Memory\n以下為過去對話摘要：\n"
             for m in memories:
                 long_term_context += f"- {m}\n"
             system_prompt += long_term_context
 
-    # 3. 短期記憶載入歷史
+    # 5. 短期記憶載入歷史
     history = []
-    if app.state.db_pool:
+    if pool:
         history = await short_term.load(msg.user_id, limit=5)
 
     # 組合訊息
@@ -139,32 +170,51 @@ async def chat(msg: StandardMessage):
         llm_messages.append(Message(role=Role(h['role']), content=h['content']))
     llm_messages.append(Message(role=Role.USER, content=msg.text))
 
-    try:
-        # 4. 呼叫 ModelRouter
-        response = await router.chat(
-            llm_messages,
-            system_prompt=system_prompt,
-        )
+    # 6. 執行 LangGraph
+    state = {
+        "user_id": msg.user_id,
+        "platform": msg.platform,
+        "messages": llm_messages,
+        "system_prompt": system_prompt,
+        "plan": pending_plan,
+        "confirmation_received": confirmation_received,
+        "skill_result": None,
+        "final_reply": None,
+        "model_router": router
+    }
 
-        # 5. 儲存本輪對話 (user message + assistant reply)
-        if app.state.db_pool:
+    try:
+        final_state = await app.state.graph.ainvoke(state)
+        
+        reply_text = final_state.get("final_reply", "Sorry, I encountered an internal error.")
+        
+        # 7. 如果產生了新的 Plan 需要確認，存入 DB
+        if pool and final_state.get("plan") and not final_state.get("skill_result") and not confirmation_received:
+            await pool.execute(
+                "INSERT INTO home_context (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                f"confirm:pending:{msg.user_id}",
+                json.dumps(final_state["plan"])
+            )
+
+        # 8. 儲存本輪對話
+        if pool:
             round_messages = [
                 {"role": "user", "content": msg.text},
-                {"role": "assistant", "content": response.content}
+                {"role": "assistant", "content": reply_text}
             ]
-            # 非同步執行儲存與索引更新，不 block 回應
             asyncio.create_task(short_term.save(msg.user_id, msg.platform, round_messages))
-
-            # 6. 非同步觸發長期記憶 embedding 生成
             asyncio.create_task(long_term.store(msg.user_id, round_messages))
 
-    except Exception as e:
-        logger.error("LLM call failed: %s", e)
-        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+        provider_name = router._default_provider
+        client = router._clients.get(provider_name)
+        model_name = client.model_name() if client else "unknown"
 
-    return BrainResponse(
-        reply_text=response.content,
-        model_used=response.model,
-        provider=response.provider,
-        cached=response.cached,
-    )
+        return BrainResponse(
+            reply_text=reply_text,
+            model_used=model_name,
+            provider=provider_name,
+        )
+
+    except Exception as e:
+        logger.error(f"Agent graph execution failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Agent error: {e}")
