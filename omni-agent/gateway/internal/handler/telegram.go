@@ -1,13 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 
 	"omni-agent/gateway/internal/model"
 
@@ -33,20 +34,29 @@ type telegramUpdate struct {
 	} `json:"message"`
 }
 
+func sendTelegramReply(chatID string, text string) {
+	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
+	if botToken == "" {
+		log.Println("TELEGRAM_BOT_TOKEN not set, cannot send reply")
+		return
+	}
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
+	payload := map[string]string{
+		"chat_id": chatID,
+		"text":    text,
+	}
+	body, _ := json.Marshal(payload)
+	_, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		log.Printf("Failed to send Telegram reply: %v", err)
+	}
+}
+
 func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 	webhookSecret := os.Getenv("TELEGRAM_WEBHOOK_SECRET")
-	allowedChatsStr := os.Getenv("TELEGRAM_ALLOWED_CHAT_IDS")
-
-	var allowedChatsList []string
-	if allowedChatsStr != "" {
-		for _, v := range strings.Split(allowedChatsStr, ",") {
-			trimmed := strings.TrimSpace(v)
-			if trimmed != "" {
-				allowedChatsList = append(allowedChatsList, trimmed)
-			}
-		}
-	} else {
-		log.Println("TELEGRAM_ALLOWED_CHAT_IDS not set, all chats rejected")
+	strangerReply := os.Getenv("TELEGRAM_STRANGER_REPLY")
+	if strangerReply == "" {
+		strangerReply = "Hello! I am a private home AI assistant. I don't recognize you, so I can't process your request."
 	}
 
 	return func(c *gin.Context) {
@@ -71,34 +81,38 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 
 		// Only handle message events
 		if payload.Message == nil {
-			log.Println("Ignoring non-message update")
 			c.JSON(http.StatusOK, gin.H{"status": "ignored"})
 			return
 		}
 
 		chatIDStr := strconv.FormatInt(payload.Message.Chat.ID, 10)
 
-		// Verification of allowed chat IDs
-		if len(allowedChatsList) == 0 {
-			log.Println("Unauthorized chat_id (all rejected)")
-			c.JSON(http.StatusOK, gin.H{"status": "unauthorized"})
-			return
-		}
+		// 1. Identity Lookup
+		var userID uuid.UUID
+		var role string
+		err = db.QueryRow(c.Request.Context(),
+			"SELECT u.id, u.role FROM users u JOIN telegram_accounts ta ON u.id = ta.user_id WHERE ta.chat_id = $1",
+			chatIDStr).Scan(&userID, &role)
 
-		isAllowed := false
-		for _, allowedID := range allowedChatsList {
-			if chatIDStr == allowedID {
-				isAllowed = true
-				break
+		if err != nil || role == "stranger" {
+			// Stranger handling
+			log.Printf("Stranger/Unauthorized chat_id: %s", chatIDStr)
+
+			// Log to stranger_knocks
+			msgExcerpt := payload.Message.Text
+			if len(msgExcerpt) > 100 {
+				msgExcerpt = msgExcerpt[:100] + "..."
 			}
-		}
+			_, _ = db.Exec(c.Request.Context(),
+				"INSERT INTO stranger_knocks (platform, external_id, first_message) VALUES ($1, $2, $3)",
+				"telegram", chatIDStr, msgExcerpt)
 
-		if !isAllowed {
-			log.Printf("Unauthorized chat_id: %s", chatIDStr)
-			c.JSON(http.StatusOK, gin.H{"status": "unauthorized"})
+			sendTelegramReply(chatIDStr, strangerReply)
+			c.JSON(http.StatusOK, gin.H{"status": "stranger_handled"})
 			return
 		}
 
+		// 2. Message Parsing
 		messageType := ""
 		text := ""
 
@@ -107,19 +121,17 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 			text = payload.Message.Text
 		} else if len(payload.Message.Photo) > 0 {
 			messageType = "image"
-			// Text is intentionally empty; downloading image is Phase 4B
 		} else {
-			log.Println("Ignoring non-text/non-image message update")
-			// Neither text nor image, ignore silently
 			c.JSON(http.StatusOK, gin.H{"status": "ignored"})
 			return
 		}
 
+		// 3. Queue Message
 		msgId := uuid.New().String()
 		stdMsg := model.StandardMessage{
 			ID:          msgId,
 			Platform:    "telegram",
-			UserID:      chatIDStr,
+			UserID:      userID.String(), // Internal UUID
 			MessageType: messageType,
 			Text:        text,
 		}
@@ -131,7 +143,7 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 			msgId, payloadJSON, 5, "pending")
 		if err != nil {
 			log.Printf("DB write error for telegram updates: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+			c.JSON(http.StatusOK, gin.H{"error": "db error"}) // Still 200 to avoid TG retry
 			return
 		}
 

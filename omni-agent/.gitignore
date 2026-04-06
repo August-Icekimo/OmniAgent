@@ -4,3 +4,4 @@ memory/postgres/
 __pycache__/
 *.pyc
 .DS_Store
+*backup*.sql
