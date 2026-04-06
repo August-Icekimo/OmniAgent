@@ -1,0 +1,26 @@
+# Phase 4 Execution Tasks
+
+- [x] **Phase 1: Database Migration (PRIORITY)**
+    - [x] Create `db/migrations/002_unified_identity.sql` (Schema + Data Migration)
+    - [x] Create `db/migrations/003_skills_strangers.sql` (Stranger logs)
+    - [x] Run migration and verify `users` data matches `family_members`
+    - [x] Verify `conversations` and `memory_embeddings` mapping to UUIDs
+- [x] **Phase 2: Gateway Identity & Bootstrap**
+    - [x] Update `gateway/cmd/server/main.go` for Admin bootstrap logic
+    - [x] Update `gateway/internal/handler/telegram.go` for DB-based auth and Stranger handling
+- [x] **Phase 3: Skills Server (Go)**
+    - [x] Create `skills/` directory and initialize Go module
+    - [x] Implement WOL handler
+    - [x] Implement Cockpit handler (Basic Auth)
+    - [x] Implement HA stub (501)
+    - [x] Update `compose.yml` to include the `skills` service
+- [x] **Phase 4: Brain Agentic Flow (LangGraph)**
+    - [x] Implement `brain/agent/graph.py` (State machine)
+    - [x] Update `brain/main.py` to route `/chat` through LangGraph
+    - [x] Implement background tasks:
+        - [x] Daily Stranger report push (at 21:00, dynamic setting)
+        - [x] StressManager proactive escalation push
+- [x] **Phase 5: Final Verification**
+    - [x] Test end-to-end flow with a skill call
+    - [x] Test admin bootstrap on fresh DB
+    - [x] Test proactive escalation timeout
