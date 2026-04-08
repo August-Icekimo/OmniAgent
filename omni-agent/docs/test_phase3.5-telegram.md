@@ -16,7 +16,7 @@
        -H "Content-Type: application/json" \
        -d '{"url":"https://cindy.icekimo.idv.tw/webhook/telegram","secret_token":"BYTHESEWORDSIPROTECTMTFAMILY"}'
      ```
-   - 若本地測試可用 `ngrok http 8080` 取得 HTTPS URL 並設定。
+   - 若本地測試可用 `ngrok http 8086` 取得 HTTPS URL 並設定。
 5. **啟動 Gateway**：
    ```bash
    podman compose up -d gateway
@@ -36,7 +36,7 @@
 ```bash
 export TG_SECRET="BYTHESEWORDSIPROTECTMTFAMILY"
 export TG_BODY='{"update_id":100001,"message":{"message_id":1,"from":{"id":123456789},"chat":{"id":123456789,"type":"private"},"text":"hello cindy"}}'
-curl -s -w "\n%{http_code}\n" -X POST http://localhost:8080/webhook/telegram \
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:8086/webhook/telegram \
   -H "Content-Type: application/json" \
   -H "X-Telegram-Bot-Api-Secret-Token: $TG_SECRET" \
   -d "$TG_BODY"

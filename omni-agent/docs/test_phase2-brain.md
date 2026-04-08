@@ -294,7 +294,7 @@ blog | grep -i "Routing to provider"
 ### TC-05-A：LINE webhook → gateway queue → brain 回覆 → status=done
 ```bash
 # 傳送 LINE 訊息到 gateway
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG" \
   -d "$BODY_TEXT"
@@ -341,7 +341,7 @@ time curl -s -X POST http://localhost:8000/chat \
 podman compose stop brain
 
 # 送一筆訊息到 gateway
-curl -s -o /dev/null -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG" \
   -d "$BODY_TEXT"
@@ -355,7 +355,7 @@ podman compose up -d brain
 sleep 15
 
 # gateway 確認仍在跑
-curl -s http://localhost:8080/health | jq .
+curl -s http://localhost:8086/health | jq .
 ```
 **預期：** gateway 不 crash，queue 不卡死在 `processing`；brain 恢復後 gateway log 不報 panic
 
@@ -444,7 +444,7 @@ ls router/ 2>&1
 
 ### TC-07-E：Phase 1 Gateway 不受影響
 ```bash
-curl -s http://localhost:8080/health | jq .
+curl -s http://localhost:8086/health | jq .
 ```
 **預期：** HTTP 200，`{"status":"ok","queue_depth":<數值>}`
 

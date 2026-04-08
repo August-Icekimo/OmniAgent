@@ -14,7 +14,7 @@ class LocalClient(ModelClient):
         base_url: str | None = None,
     ):
         self._base_url = base_url or os.environ.get(
-            "MLX_BASE_URL", "http://mac-mini.local:8080/v1"
+            "MLX_BASE_URL", "http://mac-mini.local:8086/v1"
         )
         self._model = model or os.environ.get("MLX_MODEL", "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit")
         self._client = AsyncOpenAI(

@@ -43,7 +43,7 @@ services:
     env_file:
       - .env
     ports:
-      - "${GATEWAY_PORT:-8080}:8080"
+      - "${GATEWAY_PORT:-8086}:8086"
     depends_on:
       postgres:
         condition: service_started
@@ -89,7 +89,7 @@ services:
     env_file:
       - .env
     ports:
-      - "${GATEWAY_PORT:-8080}:8080"
+      - "${GATEWAY_PORT:-8086}:8086"
     depends_on:
       postgres:
         condition: service_started

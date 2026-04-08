@@ -13,5 +13,5 @@ RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /root/
 COPY --from=builder /gateway .
 
-EXPOSE 8080
+EXPOSE 8086
 ENTRYPOINT ["./gateway"]

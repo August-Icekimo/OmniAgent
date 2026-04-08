@@ -104,7 +104,7 @@ Omni-Agent 是部署於 HomeLab 的家庭 AI 助理（Cindy）。Phase 1–3 已
 **Requirement:** 新增 Telegram handler 不得影響現有 LINE、BlueBubbles webhook 及 Brain 的正常運作。
 
 **Acceptance Criteria:**
-- [ ] Given Phase 3.5 部署完成，when 執行 `curl http://localhost:8080/health`，then 回應 HTTP `200`，`{"status":"ok"}`。
+- [ ] Given Phase 3.5 部署完成，when 執行 `curl http://localhost:8086/health`，then 回應 HTTP `200`，`{"status":"ok"}`。
 - [ ] Given LINE webhook 測試（TC-02-A from Phase 1），when 執行，then 仍 PASS。
 - [ ] Given Brain `/chat` 端點，when 送入 `platform="telegram"` 的 StandardMessage，then 正常取得 LLM 回覆（Brain 無需修改）。
 
@@ -138,7 +138,7 @@ Omni-Agent 是部署於 HomeLab 的家庭 AI 助理（Cindy）。Phase 1–3 已
 
 - ⚙️ 所有容器指令使用 `podman compose`，不使用 `docker compose`
 - ⚙️ 環境：Debian 13 + Podman，HomeLab 本地網路
-- ⚙️ Telegram webhook 需要公開可達的 HTTPS URL。HomeLab 測試建議使用 `ngrok http 8080` 或 Cloudflare Tunnel 暴露本地端口
+- ⚙️ Telegram webhook 需要公開可達的 HTTPS URL。HomeLab 測試建議使用 `ngrok http 8086` 或 Cloudflare Tunnel 暴露本地端口
 - ⚙️ 取得 `TELEGRAM_BOT_TOKEN`：與 @BotFather 對話，`/newbot` 建立後取得
 - ⚙️ 取得 `chat_id`：Bot 建立後發一筆訊息，呼叫 `https://api.telegram.org/bot<TOKEN>/getUpdates` 取得自己的 `chat_id`
 - ⚙️ 設定 webhook 指令：
@@ -151,7 +151,7 @@ Omni-Agent 是部署於 HomeLab 的家庭 AI 助理（Cindy）。Phase 1–3 已
   ```bash
   export TG_SECRET="<TELEGRAM_WEBHOOK_SECRET>"
   export TG_BODY='{"update_id":100001,"message":{"message_id":1,"from":{"id":123456789,"first_name":"Test"},"chat":{"id":123456789,"type":"private"},"text":"hello cindy"}}'
-  curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/telegram \
+  curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8086/webhook/telegram \
     -H "Content-Type: application/json" \
     -H "X-Telegram-Bot-Api-Secret-Token: $TG_SECRET" \
     -d "$TG_BODY"

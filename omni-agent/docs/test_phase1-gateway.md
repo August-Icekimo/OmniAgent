@@ -18,7 +18,7 @@ cd omni-agent
 podman compose up -d gateway postgres
 
 # 3. 等待健康檢查通過（約 10 秒）
-watch -n1 'curl -s http://localhost:8080/health | jq .'
+watch -n1 'curl -s http://localhost:8086/health | jq .'
 
 # 快捷別名（省得一直打）
 alias psql='podman exec -it omni-agent-postgres-1 psql -U omni -d omni_agent'
@@ -32,7 +32,7 @@ alias qcount='psql -c "SELECT status, count(*) FROM message_queue GROUP BY statu
 
 ### TC-01-A：正常啟動
 ```bash
-curl -s http://localhost:8080/health | jq .
+curl -s http://localhost:8086/health | jq .
 ```
 **預期：** `{"status":"ok","queue_depth":0}` HTTP 200
 
@@ -83,7 +83,7 @@ echo "SIG=$SIG"
 
 ### TC-02-A：合法文字訊息 → 進 queue
 ```bash
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG" \
   -d "$BODY_TEXT"
@@ -102,7 +102,7 @@ psql -c "SELECT id, payload->>'platform' AS platform, payload->>'user_id' AS use
 
 ### TC-02-B：錯誤 Signature → 401 拒絕
 ```bash
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: invalidsignatureXXXXXXXXXXX" \
   -d "$BODY_TEXT"
@@ -118,7 +118,7 @@ qcount  # 數量應與 TC-02-A 後相同
 
 ### TC-02-C：缺少 Signature header → 401
 ```bash
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -d "$BODY_TEXT"
 ```
@@ -133,7 +133,7 @@ curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/lin
 BODY_FOLLOW='{"destination":"Uxxxxx","events":[{"type":"follow","replyToken":"reply002","source":{"userId":"Uabc999","type":"user"}}]}'
 SIG_FOLLOW=$(echo -n "$BODY_FOLLOW" | openssl dgst -sha256 -hmac "$LINE_CHANNEL_SECRET" -binary | base64)
 
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG_FOLLOW" \
   -d "$BODY_FOLLOW"
@@ -153,7 +153,7 @@ qlogs   # 應看到 "Ignoring non-message event" debug log
 BODY_IMG='{"destination":"Uxxxxx","events":[{"type":"message","replyToken":"reply003","source":{"userId":"Uabc123","type":"user"},"message":{"type":"image","id":"img001"}}]}'
 SIG_IMG=$(echo -n "$BODY_IMG" | openssl dgst -sha256 -hmac "$LINE_CHANNEL_SECRET" -binary | base64)
 
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG_IMG" \
   -d "$BODY_IMG"
@@ -168,7 +168,7 @@ psql -c "SELECT payload->>'message_type' AS msg_type FROM message_queue ORDER BY
 
 ### TC-02-F：回應時間 < 3 秒（LINE timeout 要求）
 ```bash
-time curl -s -o /dev/null -X POST http://localhost:8080/webhook/line \
+time curl -s -o /dev/null -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG" \
   -d "$BODY_TEXT"
@@ -186,7 +186,7 @@ time curl -s -o /dev/null -X POST http://localhost:8080/webhook/line \
 BB_BODY='{"type":"new-message","data":{"text":"hi from imessage","chats":[{"chatIdentifier":"+886912345678"}]}}'
 
 curl -s -o /dev/null -w "%{http_code}" -X POST \
-  "http://localhost:8080/webhook/bluebubbles?password=test_password_123" \
+  "http://localhost:8086/webhook/bluebubbles?password=test_password_123" \
   -H "Content-Type: application/json" \
   -d "$BB_BODY"
 ```
@@ -203,7 +203,7 @@ psql -c "SELECT payload->>'platform' AS platform, payload->>'user_id' AS user_id
 ### TC-03-B：錯誤 password → 401
 ```bash
 curl -s -o /dev/null -w "%{http_code}" -X POST \
-  "http://localhost:8080/webhook/bluebubbles?password=wrong_password" \
+  "http://localhost:8086/webhook/bluebubbles?password=wrong_password" \
   -H "Content-Type: application/json" \
   -d "$BB_BODY"
 ```
@@ -216,7 +216,7 @@ curl -s -o /dev/null -w "%{http_code}" -X POST \
 ### TC-03-C：缺少 password → 401
 ```bash
 curl -s -o /dev/null -w "%{http_code}" -X POST \
-  "http://localhost:8080/webhook/bluebubbles" \
+  "http://localhost:8086/webhook/bluebubbles" \
   -H "Content-Type: application/json" \
   -d "$BB_BODY"
 ```
@@ -231,7 +231,7 @@ curl -s -o /dev/null -w "%{http_code}" -X POST \
 BB_READ='{"type":"message-read","data":{"guid":"abc"}}'
 
 curl -s -o /dev/null -w "%{http_code}" -X POST \
-  "http://localhost:8080/webhook/bluebubbles?password=test_password_123" \
+  "http://localhost:8086/webhook/bluebubbles?password=test_password_123" \
   -H "Content-Type: application/json" \
   -d "$BB_READ"
 ```
@@ -251,7 +251,7 @@ podman compose stop gateway
 podman compose up -d gateway
 
 sleep 3
-curl -s http://localhost:8080/health | jq .
+curl -s http://localhost:8086/health | jq .
 ```
 **預期：** gateway 健康，log 含 `"BRAIN_URL is not set"`，不 crash
 
@@ -264,7 +264,7 @@ curl -s http://localhost:8080/health | jq .
 
 ```bash
 # 傳送一筆訊息
-curl -s -o /dev/null -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG" \
   -d "$BODY_TEXT"
@@ -292,7 +292,7 @@ podman compose stop gateway
 BRAIN_URL=http://host.containers.internal:9999 podman compose up -d gateway
 
 # 送一筆訊息
-curl -s -o /dev/null -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG" \
   -d "$BODY_TEXT"
@@ -385,7 +385,7 @@ done
 SENSITIVE_BODY='{"destination":"U","events":[{"type":"message","replyToken":"r","source":{"userId":"Uprivacy","type":"user"},"message":{"type":"text","id":"s1","text":"我的密碼是 secret123"}}]}'
 SIG_S=$(echo -n "$SENSITIVE_BODY" | openssl dgst -sha256 -hmac "$LINE_CHANNEL_SECRET" -binary | base64)
 
-curl -s -o /dev/null -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG_S" \
   -d "$SENSITIVE_BODY"
@@ -429,7 +429,7 @@ podman run --rm omni-gateway:test --help 2>&1 || true
 
 ### TC-08-A：GET 打 POST-only endpoint → 405
 ```bash
-curl -s -o /dev/null -w "%{http_code}" -X GET http://localhost:8080/webhook/line
+curl -s -o /dev/null -w "%{http_code}" -X GET http://localhost:8086/webhook/line
 ```
 **預期：** HTTP `405`
 
@@ -439,7 +439,7 @@ curl -s -o /dev/null -w "%{http_code}" -X GET http://localhost:8080/webhook/line
 
 ### TC-08-B：畸形 JSON body → 400
 ```bash
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG" \
   -d "THIS IS NOT JSON"
@@ -454,7 +454,7 @@ curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/lin
 ```bash
 podman compose stop postgres
 sleep 2
-curl -s http://localhost:8080/health | jq .
+curl -s http://localhost:8086/health | jq .
 ```
 **預期：** HTTP `503`，body 含 `"db"` 欄位
 
@@ -462,7 +462,7 @@ curl -s http://localhost:8080/health | jq .
 # 恢復
 podman compose up -d postgres
 sleep 5
-curl -s http://localhost:8080/health | jq .
+curl -s http://localhost:8086/health | jq .
 # 預期：回到 200 ok
 ```
 **實際結果：** _______________  **PASS / FAIL**

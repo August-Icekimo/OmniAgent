@@ -41,7 +41,7 @@ services:
     env_file:
       - .env
     ports:
-      - "${GATEWAY_PORT:-8080}:8080"
+      - "${GATEWAY_PORT:-8086}:8086"
     depends_on:
       postgres:
         condition: service_started
@@ -95,7 +95,7 @@ RUN go build -o gateway ./cmd/server/main.go
 FROM docker.io/library/alpine:latest
 WORKDIR /app
 COPY --from=builder /app/gateway .
-EXPOSE 8080
+EXPOSE 8086
 ENTRYPOINT ["./gateway"]
 EOF
 
@@ -220,7 +220,7 @@ BLUEBUBBLES_PASSWORD=
 # LLM — 原廠 SDK 直連（填入即啟用對應 provider）
 ANTHROPIC_API_KEY=          # Claude (預設 provider)
 GEMINI_API_KEY=             # Gemini (可選，fallback)
-MLX_BASE_URL=               # Local MLX, e.g. http://mac-mini.local:8080/v1
+MLX_BASE_URL=               # Local MLX, e.g. http://mac-mini.local:8086/v1
 MLX_MODEL=mlx-community/Meta-Llama-3.1-8B-Instruct-4bit
 
 # Brain
@@ -228,7 +228,7 @@ BRAIN_URL=http://brain:8000/chat
 BRAIN_PORT=8000
 
 # Gateway
-GATEWAY_PORT=8080
+GATEWAY_PORT=8086
 EOF
 
 # ── db/migrations/001_init.sql ────────────────────────
@@ -321,5 +321,5 @@ echo "  1. cd $TARGET"
 echo "  2. cp .env.example .env && vi .env          # 填入 ANTHROPIC_API_KEY 等"
 echo "  3. 確認 SOUL.md 與 CLAUDE.md 內容正確"
 echo "  4. podman compose up -d --build              # 啟動 postgres + gateway + brain"
-echo "  5. curl http://localhost:8080/health         # 確認 gateway"
+echo "  5. curl http://localhost:8086/health         # 確認 gateway"
 echo "  6. curl http://localhost:8000/health         # 確認 brain"

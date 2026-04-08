@@ -85,7 +85,7 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	
+
 	// Custom logger that outputs valid JSON and doesn't log message body or webhook body
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
 		return fmt.Sprintf("{\"method\":\"%s\",\"path\":\"%s\",\"status\":%d,\"latency\":\"%s\"}\n",
@@ -98,7 +98,7 @@ func main() {
 		var depth int
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		
+
 		err := db.QueryRow(ctx, "SELECT COUNT(*) FROM message_queue WHERE status = 'pending'").Scan(&depth)
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
@@ -127,10 +127,9 @@ func main() {
 		r.POST("/webhook/telegram", handler.TelegramWebhook(db))
 	}
 
-
 	port := os.Getenv("GATEWAY_PORT")
 	if port == "" {
-		port = "8080"
+		port = "8086"
 	}
 	log.Printf("Gateway listening on :%s\n", port)
 	if err := r.Run(":" + port); err != nil {

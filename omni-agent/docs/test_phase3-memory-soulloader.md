@@ -418,7 +418,7 @@ glog | grep -i "calm\|stress"
 ```bash
 psql -c "DELETE FROM conversations WHERE user_id = 'Uabc123';"
 
-curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/webhook/line \
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8086/webhook/line \
   -H "Content-Type: application/json" \
   -H "X-Line-Signature: $SIG" \
   -d "$BODY_TEXT"
@@ -575,7 +575,7 @@ podman build -t omni-brain:phase3-test ./brain
 
 ### TC-09-B：Phase 1 Gateway 不受影響
 ```bash
-curl -s http://localhost:8080/health | jq .
+curl -s http://localhost:8086/health | jq .
 ```
 **預期：** HTTP 200，`{"status":"ok","queue_depth":<數值>}`
 
