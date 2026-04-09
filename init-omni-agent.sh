@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # init-omni-agent.sh
-# 建立 Omni-Agent 專案目錄結構（Phase 2 架構：三層，無 LiteLLM）
+# 建立 Omni-Agent 專案目錄結構 (Phase 4 最終穩定版：LangGraph + MCP Skills + Unified Identity)
 # 使用方式：bash init-omni-agent.sh [目標目錄，預設為 ./omni-agent]
 
 set -euo pipefail
 
 TARGET="${1:-./omni-agent}"
 
-echo "🤖 建立 Omni-Agent 專案結構於：$TARGET"
+echo "🤖 正在初始化 Omni-Agent 專案結構成員：$TARGET"
 
 # ── 根目錄 ────────────────────────────────────────────
 mkdir -p "$TARGET"
 
 # --- compose.yml ---
+# 包含 Postgres (Vector), Gateway (Go), Brain (Python/LangGraph), Skills (Go/MCP)
 cat > "$TARGET/compose.yml" << 'EOF'
 services:
   postgres:
@@ -55,31 +56,42 @@ services:
       - .env
     ports:
       - "${BRAIN_PORT:-8000}:8000"
+    volumes:
+      - ./SOUL.md:/SOUL.md:ro
     depends_on:
       postgres:
         condition: service_started
+    restart: unless-stopped
+
+  skills:
+    build:
+      context: ./skills
+    container_name: omni-agent-skills-1
+    env_file:
+      - .env
+    ports:
+      - "${SKILLS_PORT:-8001}:8001"
     restart: unless-stopped
 EOF
 
 touch "$TARGET/.env.example"
 touch "$TARGET/.gitignore"
 
-# 複製已生成的靈魂文件（若在同目錄下）
+# 複製已生成的靈魂文件 (若在同目錄下)
 for f in SOUL.md CLAUDE.md; do
   if [ -f "./$f" ]; then
     cp "./$f" "$TARGET/$f"
-    echo "  ✅ 複製 $f"
+    echo "  ✅ 已複製 $f"
   else
     touch "$TARGET/$f"
-    echo "  ⚠️  $f 不存在，建立空白檔案，請手動填入"
+    echo "  ⚠️  $f 不存在，已建立空白檔案，請記得填入手感與靈魂"
   fi
 done
 
-# ── Gateway（Go）─────────────────────────────────────
+# ── Gateway (Go API 閘道器) ───────────────────────────
 mkdir -p "$TARGET/gateway/cmd/server"
 mkdir -p "$TARGET/gateway/internal/handler"
 mkdir -p "$TARGET/gateway/internal/model"
-mkdir -p "$TARGET/gateway/internal/stress"
 mkdir -p "$TARGET/gateway/internal/queue"
 mkdir -p "$TARGET/gateway/internal/forwarder"
 
@@ -102,13 +114,13 @@ EOF
 touch "$TARGET/gateway/go.mod"
 touch "$TARGET/gateway/cmd/server/main.go"
 touch "$TARGET/gateway/internal/handler/line.go"
+touch "$TARGET/gateway/internal/handler/telegram.go"
 touch "$TARGET/gateway/internal/handler/bluebubbles.go"
 touch "$TARGET/gateway/internal/model/standard_message.go"
-touch "$TARGET/gateway/internal/stress/manager.go"
 touch "$TARGET/gateway/internal/queue/queue.go"
 touch "$TARGET/gateway/internal/forwarder/brain.go"
 
-# ── Brain（Python）───────────────────────────────────
+# ── Brain (Python LangGraph 大腦) ────────────────────
 mkdir -p "$TARGET/brain/agent/prompts"
 mkdir -p "$TARGET/brain/llm"
 mkdir -p "$TARGET/brain/memory"
@@ -143,54 +155,41 @@ python-dotenv>=1.1.0
 EOF
 
 touch "$TARGET/brain/main.py"
-
-# agent/（Phase 3 LangGraph）
 touch "$TARGET/brain/agent/graph.py"
 touch "$TARGET/brain/agent/prompts/system.py"
-touch "$TARGET/brain/agent/prompts/tools.py"
-
-# llm/（Phase 2 ModelRouter + 原廠 SDK）
-touch "$TARGET/brain/llm/__init__.py"
-touch "$TARGET/brain/llm/base.py"
-touch "$TARGET/brain/llm/claude_client.py"
-touch "$TARGET/brain/llm/gemini_client.py"
-touch "$TARGET/brain/llm/local_client.py"
-touch "$TARGET/brain/llm/router.py"
-
-# memory/（Phase 3）
 touch "$TARGET/brain/memory/short_term.py"
 touch "$TARGET/brain/memory/long_term.py"
-
-# skills/（Phase 4 MCP）
-touch "$TARGET/brain/skills/__init__.py"
-touch "$TARGET/brain/skills/proxmox.py"
-touch "$TARGET/brain/skills/wake_on_lan.py"
-touch "$TARGET/brain/skills/home_assistant.py"
-
-# soul/（Phase 3 SoulLoader）
 touch "$TARGET/brain/soul/loader.py"
-touch "$TARGET/brain/soul/templates/context.md.jinja"
 
-# ── Memory（PostgreSQL volumes）──────────────────────
+# ── Skills (Go MCP 技能服務) ──────────────────────────
+mkdir -p "$TARGET/skills/handler"
+
+# --- skills/Dockerfile ---
+cat > "$TARGET/skills/Dockerfile" << 'EOF'
+FROM docker.io/library/golang:1.23-alpine AS builder
+WORKDIR /app
+COPY go.mod ./
+COPY . .
+RUN go build -o skills main.go
+
+FROM docker.io/library/alpine:latest
+WORKDIR /app
+COPY --from=builder /app/skills .
+EXPOSE 8001
+ENTRYPOINT ["./skills"]
+EOF
+
+touch "$TARGET/skills/go.mod"
+touch "$TARGET/skills/main.go"
+touch "$TARGET/skills/handler/wol.go"
+touch "$TARGET/skills/handler/proxmox.go"
+
+# ── 其他支援目錄 ──────────────────────────────────────
 mkdir -p "$TARGET/memory/postgres"
-
-# ── Groups（per-group context）───────────────────────
-mkdir -p "$TARGET/groups/family"
-mkdir -p "$TARGET/groups/homelab"
-
-touch "$TARGET/groups/family/CLAUDE.md"
-touch "$TARGET/groups/homelab/CLAUDE.md"
-
-# ── Docs ─────────────────────────────────────────────
+mkdir -p "$TARGET/db/migrations"
 mkdir -p "$TARGET/docs"
 
-touch "$TARGET/docs/architecture.md"
-touch "$TARGET/docs/SECURITY.md"
-
-# ── DB migrations ────────────────────────────────────
-mkdir -p "$TARGET/db/migrations"
-
-# ── .gitignore 預設內容 ───────────────────────────────
+# ── .gitignore ───────────────────────────────────────
 cat > "$TARGET/.gitignore" << 'EOF'
 .env
 memory/postgres/
@@ -200,7 +199,7 @@ __pycache__/
 .DS_Store
 EOF
 
-# ── .env.example 預設內容 ─────────────────────────────
+# ── .env.example ─────────────────────────────────────
 cat > "$TARGET/.env.example" << 'EOF'
 # PostgreSQL
 POSTGRES_HOST=postgres
@@ -209,117 +208,131 @@ POSTGRES_DB=omni_agent
 POSTGRES_USER=omni
 POSTGRES_PASSWORD=changeme
 
-# LINE
+# 平台通訊設定 (填入即啟用)
 LINE_CHANNEL_SECRET=
 LINE_CHANNEL_ACCESS_TOKEN=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALLOWED_CHAT_IDS=      # 逗號分隔，例如 "12345,67890"
 
-# BlueBubbles
+# BlueBubbles (選配)
 BLUEBUBBLES_SERVER_URL=
 BLUEBUBBLES_PASSWORD=
 
-# LLM — 原廠 SDK 直連（填入即啟用對應 provider）
-ANTHROPIC_API_KEY=          # Claude (預設 provider)
-GEMINI_API_KEY=             # Gemini (可選，fallback)
-MLX_BASE_URL=               # Local MLX, e.g. http://mac-mini.local:8086/v1
-MLX_MODEL=mlx-community/Meta-Llama-3.1-8B-Instruct-4bit
+# LLM 供應商 (優先使用 Anthropic)
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=                 # 供 Memory 向量化與備援使用
+OPENAI_API_KEY=
 
-# Brain
+# Local LLM (選配)
+MLX_BASE_URL=                   # 例如 http://host.docker.internal:8086/v1
+MLX_MODEL=
+
+# 系統內部 URL
 BRAIN_URL=http://brain:8000/chat
-BRAIN_PORT=8000
-
-# Gateway
+SKILLS_URL=http://skills:8001
 GATEWAY_PORT=8086
+BRAIN_PORT=8000
+SKILLS_PORT=8001
 EOF
 
-# ── db/migrations/001_init.sql ────────────────────────
+# ── db/migrations/001_init.sql (Phase 4 整合版) ──────
 cat > "$TARGET/db/migrations/001_init.sql" << 'EOF'
--- Omni-Agent — Initial Schema
--- Phase 1+2 骨架，後續 Phase 逐步填充
--- 注意：使用 gen_random_uuid()（PostgreSQL 13+ 內建，不需 uuid-ossp extension）
-
+-- Omni-Agent 初始化 Schema (Phase 4 穩定版)
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- 家庭成員（動態 FAMILY 資料主表）
-CREATE TABLE IF NOT EXISTS family_members (
-    line_id      TEXT PRIMARY KEY,
+-- 核心使用者表 (Unified Identity)
+CREATE TABLE IF NOT EXISTS users (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name         TEXT NOT NULL,
     role         TEXT NOT NULL DEFAULT 'member', -- admin/member/child
     preferences  JSONB DEFAULT '{}',
     access_level INT DEFAULT 1,
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
     updated_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 對話歷史（Phase 3 Brain 記憶使用）
+-- 通訊平台關聯
+CREATE TABLE IF NOT EXISTS line_accounts (
+    line_id    TEXT PRIMARY KEY,
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS telegram_accounts (
+    chat_id    TEXT PRIMARY KEY,
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 對話歷史 (短期記憶)
 CREATE TABLE IF NOT EXISTS conversations (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id    TEXT REFERENCES family_members(line_id),
-    platform   TEXT NOT NULL,                    -- line/imessage
-    messages   JSONB[] DEFAULT '{}',             -- 每筆為 {role, content}
+    user_id    UUID REFERENCES users(id),
+    platform   TEXT NOT NULL,
+    messages   JSONB[] DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 長期語意記憶（pgvector RAG — Phase 3）
+-- 長期語意記憶 (pgvector - 配合 Gemini 768 維度)
 CREATE TABLE IF NOT EXISTS memory_embeddings (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id    TEXT NOT NULL,
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     content    TEXT NOT NULL,
-    embedding  vector(1536),
+    embedding  vector(768),
     metadata   JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS memory_embeddings_hnsw
-    ON memory_embeddings USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS memory_embeddings_hnsw ON memory_embeddings USING hnsw (embedding vector_cosine_ops);
 
--- Message Queue（SKIP LOCKED — Phase 1 Gateway 核心）
+-- 任務隊列 (Skip Locked)
 CREATE TABLE IF NOT EXISTS message_queue (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     payload      JSONB NOT NULL,
     priority     INT DEFAULT 5,
-    status       TEXT DEFAULT 'pending',         -- pending/processing/done/failed
+    status       TEXT DEFAULT 'pending',
     stress_level TEXT,
     created_at   TIMESTAMPTZ DEFAULT NOW(),
     locked_at    TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS message_queue_pending
-    ON message_queue (priority DESC, created_at ASC)
-    WHERE status = 'pending';
 
--- 小腦袋日記（StressManager — 供 soul/loader.py 動態注入 SOUL.md）
+-- 系統狀態與壓力日誌 (StressManager)
 CREATE TABLE IF NOT EXISTS stress_logs (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    level        TEXT NOT NULL,                  -- StressCalm/Busy/Overload/Critical
+    level        TEXT NOT NULL,
     metrics      JSONB NOT NULL,
     action_taken TEXT,
-    mood         TEXT,                           -- 中文心情短語，供 LLM 自我歷史感
+    mood         TEXT,
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 家庭環境與設備狀態（JSONB kv store）
+-- 通用 Key-Value 存儲
 CREATE TABLE IF NOT EXISTS home_context (
     key        TEXT PRIMARY KEY,
     value      JSONB NOT NULL,
     active     BOOLEAN DEFAULT true,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- 陌生人嘗試觸發記錄 (Stranger Knocks)
+CREATE TABLE IF NOT EXISTS stranger_knocks (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    platform      TEXT NOT NULL,
+    external_id   TEXT NOT NULL,
+    first_message TEXT,
+    notified_at   TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
 EOF
 
-# ── 完成 ──────────────────────────────────────────────
+# ── 初始化完成 ─────────────────────────────────────────
 echo ""
-echo "✅ 專案結構建立完成！"
+echo "✅ Omni-Agent Phase 4 專案結構初始化完成！"
 echo ""
-echo "📁 目錄總覽："
-find "$TARGET" -not -path "*/.git/*" -not -path "*/memory/postgres/*" | sort | \
-  awk '{
-    n = split($0, a, "/");
-    printf "%s%s\n", substr("                              ", 1, (n-2)*2), a[n]
-  }'
-
-echo ""
-echo "📋 下一步："
+echo "📋 後續步驟："
 echo "  1. cd $TARGET"
-echo "  2. cp .env.example .env && vi .env          # 填入 ANTHROPIC_API_KEY 等"
-echo "  3. 確認 SOUL.md 與 CLAUDE.md 內容正確"
-echo "  4. podman compose up -d --build              # 啟動 postgres + gateway + brain"
-echo "  5. curl http://localhost:8086/health         # 確認 gateway"
-echo "  6. curl http://localhost:8000/health         # 確認 brain"
+echo "  2. cp .env.example .env && vi .env          # 填入金鑰與 Token"
+echo "  3. podman compose up -d --build              # 啟動四大核心服務"
+echo "  4. 存取 http://localhost:8086/health         # 檢查系統健康狀態"
+echo ""
+echo "💡 提示：本版本已整合 Unified Identity 與技能系統，請確保 .env 中的 ID 設定正確。"
