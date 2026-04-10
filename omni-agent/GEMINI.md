@@ -38,8 +38,19 @@
 
 ### 3.2 常用指令快查
 - **OmniAgent (Debian)**: `podman-compose up -d`
-- **Secure Gateway (DSM)**: `podman compose --project-name secure-gateway up -d`
+- **Secure Gateway (DSM)**: `docker ps` (透過 `syno` Context) 或 `ssh VivienLeigh "docker ps"`
 - **資料庫連接**: `psql -h localhost -U omni -d omni_agent`
+
+### 3.3 SSH 直接對戰技能 (SSH Direct Battle Skill)
+我們決定捨棄繁瑣的 MCP Server 載入，改用更輕量、直接的 SSH 技能。這能省下大量系統開銷並提高反應速度。
+- **目標節點**: `VivienLeigh` (Synology NAS, 192.168.68.69)
+- **核心操作指令**: 
+    - `ssh VivienLeigh "docker ps"` (查看容器狀態)
+    - `ssh VivienLeigh "docker logs --tail 50 <name>"` (讀取日誌)
+- **Token 優化**: 
+    - 強烈建議搭配 `rtk-bridge` 呼叫 SSH。
+    - **範例**: `npx -y rtk-bridge --command 'ssh VivienLeigh "docker logs --tail 50 secure-gateway"'`
+    - 這能自動過濾 Caddy/WAF 的垃圾重複日誌，節省超過 70% 的 Token。
 
 ---
 
@@ -49,7 +60,7 @@
 當你修改 Gateway 或 Brain 時，請確保遵循以下協定：
 1. **Gateway**: 驗證來源簽章 (LINE/iMessage/Telegram) → 轉化為 `StandardMessage{}` 結構 → 寫入 `message_queue` 並回傳 `202 Accepted`。
 2. **Brain**: 從 `message_queue` 取出消息 (SKIP LOCKED) → 進入 `LangGraph` 狀態節點處理 → 產出回覆訊息內容。
-3. secure-gateway: Cannot operate DSM remote docker compose directly, need to push to github after human review and DSM GUI operations.
+3. **secure-gateway**: 優先使用「SSH 直接對戰技能」進行除錯與重啟。
 
 ### 4.2 記憶結構
 - **短期記憶**: `conversations` 表，儲存最近的對話 JSON。
@@ -63,6 +74,7 @@
 2.  **無痛重載**: Caddy 設定修改後，優先使用 `caddy reload` 而非重启容器。
 3.  **環境變數同步**: `secure-gateway` 與 `omni-agent` 共用部分變數（如 `DOMAIN_NAME`），修改時請確認兩邊是否連動。
 4.  **人格檢查**: 每次輸出文字回覆給 Iceman 前，檢查是否含有「好的」、「為您服務」等違禁詞彙。
+5.  **不 load MCP**: 對於 Synology 的服務，別再想著載入 MCP，直接用 `ssh` 完成戰鬥。
 
 ---
 
