@@ -10,19 +10,35 @@
 目標角色是**家庭服務員 / 家族總管**，服務對象是整個家庭，而非單一用戶。
 
 部署環境：
+- **Synology DSM** + Container Manager（Security Gateway）
+  - **Front-door**: 處理外部真實網路流量 (Realnetwork Traffic)
+  - **Caddy**: 反向代理 + Coraza WAF (Web Application Firewall)
+  - **CrowdSec**: 全球聯防威脅隔離
+  - **Guacamole**: 專屬遠端自動化管理入口
 - **Debian 13** + Podman 容器（主力運算節點）
-- **Mac Mini M4** + mlx-lm（本地 LLM 推論，OpenAI-compatible API）
+  - **The Senses**: Go API Gateway
+  - **The Brain**: Python FastAPI + LangGraph
+  - **The Hippocampus**: PostgreSQL + pgvector
+- **Mac Mini M4** + mlx-lm（本地 LLM 推論核心，OpenAI-compatible API）
 
 ---
 
 ## 1. 系統架構：三層架構
 
 ```
-外部世界
-  │  LINE Webhook / BlueBubbles (iMessage)
+真實網路 (External World)
+  │  HTTPS (443) / LINE Webhook / iMessage
   ▼
 ┌─────────────────────────────────────────┐
-│  The Senses — Go API Gateway            │
+│  Security Gateway (Synology DSM)        │
+│  · Caddy + Coraza WAF (流量過濾)         │
+│  · CrowdSec (IP 封鎖與威脅情資)          │
+│  · Guacamole (管理入口)                  │
+└───────────────┬─────────────────────────┘
+                │ Proxy Pass (Internal Network)
+                ▼
+┌─────────────────────────────────────────┐
+│  The Senses — Go API Gateway (Debian)   │
 │  · 接收並驗證 Webhook 簽章              │
 │  · 統一轉換為 StandardMessage{}         │
 │  · 非同步回覆（應對 LINE 3 秒 timeout） │
