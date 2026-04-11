@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import json
+from datetime import datetime
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
@@ -38,6 +39,7 @@ class BrainResponse(BaseModel):
     model_used: str
     provider: str
     cached: bool = False
+    routing_reason: str | None = None
 
 
 # --- App Lifespan ---
@@ -64,7 +66,8 @@ async def lifespan(app: FastAPI):
     try:
         pool = await asyncpg.create_pool(dsn)
         app.state.db_pool = pool
-        logger.info("DB pool ready")
+        app.state.router.set_db_pool(pool)
+        logger.info("DB pool ready and linked to router")
     except Exception as e:
         logger.error(f"DB unavailable, running in stateless mode: {e}")
         app.state.db_pool = None
@@ -115,6 +118,11 @@ async def chat(msg: StandardMessage):
     short_term = app.state.short_term
     long_term = app.state.long_term
     pool = app.state.db_pool
+    
+    # 0. 狀態預設值
+    confirmation_received = False
+    pending_plan = None
+    manual_selected_provider = None
 
     # 1. 處理特殊狀態：模型升級確認 (僅限 Admin)
     # 此處簡化：假設所有進來的 UserID 都已在 Gateway 驗證過
@@ -131,17 +139,25 @@ async def chat(msg: StandardMessage):
                     model_used=target_model, provider="escalated"
                 )
 
-    # 2. 處理特殊狀態：技能確認回覆
-    confirmation_received = False
-    pending_plan = None
+    # 2. 處理特殊狀態：技能確認回覆 或 模型升級確認回覆
     if pool:
+        # 技能確認
         pending_check = await pool.fetchrow("SELECT value FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
         if pending_check:
             if any(word in msg.text.lower() for word in ["好", "可以", "確認", "yes", "go"]):
                 confirmation_received = True
                 pending_plan = json.loads(pending_check['value'])
-            # 無論是否同意，這次訊息後都清除 pending
             await pool.execute("DELETE FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
+            
+        # 模型升級確認 (Phase 4A)
+        upgrade_check = await pool.fetchrow("SELECT value FROM home_context WHERE key = $1", f"model_upgrade:pending:{msg.user_id}")
+        if upgrade_check:
+            upgrade_data = json.loads(upgrade_check['value'])
+            if any(word in msg.text.lower() for word in ["好", "可以", "升級", "yes", "ok"]):
+                confirmation_received = True
+                manual_selected_provider = upgrade_data.get("target_provider")
+                logger.info(f"User confirmed model upgrade to {manual_selected_provider}")
+            await pool.execute("DELETE FROM home_context WHERE key = $1", f"model_upgrade:pending:{msg.user_id}")
 
     # 3. SoulLoader 渲染 system prompt
     try:
@@ -176,45 +192,113 @@ async def chat(msg: StandardMessage):
         "platform": msg.platform,
         "messages": llm_messages,
         "system_prompt": system_prompt,
-        "plan": pending_plan,
-        "confirmation_received": confirmation_received,
-        "skill_result": None,
-        "final_reply": None,
-        "model_router": router
+        "model_router": router,
+        "selected_provider": manual_selected_provider,
+        "routing_reason": f"manual:confirmed" if manual_selected_provider else None,
+        "complexity": None,
+        "complexity_reason": None,
+        "upgrade_requested": False
     }
 
     try:
         final_state = await app.state.graph.ainvoke(state)
         
+        # 8. 儲存本輪對話 (含 Metadata)
         reply_text = final_state.get("final_reply", "Sorry, I encountered an internal error.")
-        
-        # 7. 如果產生了新的 Plan 需要確認，存入 DB
-        if pool and final_state.get("plan") and not final_state.get("skill_result") and not confirmation_received:
-            await pool.execute(
-                "INSERT INTO home_context (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                f"confirm:pending:{msg.user_id}",
-                json.dumps(final_state["plan"])
-            )
+        provider_name = final_state.get("selected_provider") or router._default_provider
+        client = router._clients.get(provider_name)
+        model_name = client.model_name() if client else "unknown"
 
-        # 8. 儲存本輪對話
         if pool:
             round_messages = [
                 {"role": "user", "content": msg.text},
                 {"role": "assistant", "content": reply_text}
             ]
-            asyncio.create_task(short_term.save(msg.user_id, msg.platform, round_messages))
+            metadata = {
+                "model": model_name,
+                "provider": provider_name,
+                "routing_reason": final_state.get("routing_reason")
+            }
+            asyncio.create_task(short_term.save(msg.user_id, msg.platform, round_messages, metadata))
             asyncio.create_task(long_term.store(msg.user_id, round_messages))
 
-        provider_name = router._default_provider
-        client = router._clients.get(provider_name)
-        model_name = client.model_name() if client else "unknown"
+        # 9. 處理 Phase 4A 升級確認 (F-06 Auto-confirm)
+        if pool and final_state.get("upgrade_requested") and final_state.get("final_reply"):
+            # 存入 pending 狀態
+            await pool.execute(
+                "INSERT INTO home_context (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                f"model_upgrade:pending:{msg.user_id}",
+                json.dumps({
+                    "start_time": datetime.now().isoformat(),
+                    "target_provider": final_state.get("selected_provider"), # 注意：規劃時已決定好
+                    "messages": [m.__dict__ for m in final_state["messages"]]
+                })
+            )
+            # 啟動 15s 自動確認任務
+            asyncio.create_task(auto_confirm_model_upgrade(app, msg, final_state))
 
         return BrainResponse(
             reply_text=reply_text,
             model_used=model_name,
             provider=provider_name,
+            routing_reason=final_state.get("routing_reason")
         )
 
     except Exception as e:
         logger.error(f"Agent graph execution failed: {e}")
         raise HTTPException(status_code=502, detail=f"Agent error: {e}")
+async def auto_confirm_model_upgrade(app, orig_msg: StandardMessage, state: dict):
+    """15秒自動確認升級背景任務。"""
+    user_id = orig_msg.user_id
+    pool = app.state.db_pool
+    
+    await asyncio.sleep(15)
+    
+    # 檢查是否還在 pending
+    if pool:
+        row = await pool.fetchrow("SELECT value FROM home_context WHERE key = $1", f"model_upgrade:pending:{user_id}")
+        if not row:
+            logger.info(f"Auto-confirm skipped for user {user_id}: no pending upgrade")
+            return
+            
+        # 執行升級！
+        logger.info(f"Auto-confirming model upgrade for user {user_id}")
+        await pool.execute("DELETE FROM home_context WHERE key = $1", f"model_upgrade:pending:{user_id}")
+        
+        # 重新執行 LangGraph
+        state["upgrade_requested"] = False
+        state["confirmation_received"] = True
+        # 注意：selected_provider 已經在 planner_node 決定好了
+        
+        try:
+            final_state = await app.state.graph.ainvoke(state)
+            reply_text = final_state.get("final_reply", "執行完成（自動升級）。")
+            
+            # 推送訊息給使用者 (透過 Telegram Bot API)
+            bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+            admin_chats = await pool.fetch("SELECT chat_id FROM telegram_accounts WHERE user_id = (SELECT id FROM users WHERE id = $1)", user_id)
+            
+            # 如果是 Telegram
+            if orig_msg.platform == "telegram" and bot_token:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    target_chat = orig_msg.id # Telegram 裡 id 可能是 chat_id 或 msg_id，這裡需確認整合方式
+                    # 為簡化，使用原本訊息傳來的 user_id 關聯的 chat_id
+                    chat_row = await pool.fetchrow("SELECT chat_id FROM telegram_accounts WHERE user_id = $1::uuid", user_id)
+                    if chat_row:
+                        await client.post(
+                            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                            json={"chat_id": chat_row['chat_id'], "text": reply_text}
+                        )
+            
+            # TODO: 支援 LINE 及其它平台
+            # 儲存對話 (含 Metadata)
+            metadata = {
+                "model": final_state.get("selected_provider"),
+                "provider": final_state.get("selected_provider"),
+                "routing_reason": "auto_confirm"
+            }
+            asyncio.create_task(app.state.short_term.save(user_id, orig_msg.platform, round_messages, metadata))
+            
+        except Exception as e:
+            logger.error(f"Auto-confirm execution failed: {e}")
