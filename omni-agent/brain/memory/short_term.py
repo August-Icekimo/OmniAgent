@@ -9,7 +9,7 @@ class ShortTermMemory:
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
 
-    async def save(self, user_id: str, platform: str, messages: list[dict]):
+    async def save(self, user_id: str, platform: str, messages: list[dict], metadata: dict = None):
         """
         Saves user and assistant messages to the `conversations` table.
         Updates the memory index (summary) for the user.
@@ -19,6 +19,13 @@ class ShortTermMemory:
             return
 
         try:
+            # 將 metadata 注入到最後一則 (Assistant) 訊息中
+            if metadata:
+                for msg in reversed(messages):
+                    if msg['role'] == 'assistant':
+                        msg.update(metadata)
+                        break
+
             # Serialize each message dict to JSON string for jsonb[] column
             serialized = [json.dumps(m, ensure_ascii=False) for m in messages]
 
