@@ -68,11 +68,25 @@ func LineWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 			if event.Type != "message" {
 				continue // ignore non-message events silently
 			}
+
+			// 1. Identity Lookup
+			var userIDStr string = event.Source.UserId
+			var dbUserID uuid.UUID
+			err = db.QueryRow(c.Request.Context(), 
+				"SELECT u.id FROM users u JOIN line_accounts la ON u.id = la.user_id WHERE la.line_id = $1",
+				event.Source.UserId).Scan(&dbUserID)
+			
+			if err == nil {
+				userIDStr = dbUserID.String()
+			} else {
+				log.Printf("LINE user not registered in line_accounts: %s, using raw ID as fallback", event.Source.UserId)
+			}
+
 			msgId := uuid.New().String()
 			stdMsg := model.StandardMessage{
 				ID:          msgId,
 				Platform:    "line",
-				UserID:      event.Source.UserId,
+				UserID:      userIDStr,
 				MessageType: event.Message.Type,
 				Text:        event.Message.Text,
 			}
