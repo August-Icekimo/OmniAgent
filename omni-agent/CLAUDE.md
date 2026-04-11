@@ -152,21 +152,36 @@ StressCritical → 強制熔斷 + 主帳號警報
 ## 3. 資料庫 Schema（規範版）
 
 ```sql
--- 家庭成員（動態 FAMILY 資料主表）
-CREATE TABLE family_members (
-    line_id      TEXT PRIMARY KEY,
+-- 用戶（統一身份架構）
+CREATE TABLE users (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name         TEXT NOT NULL,
-    role         TEXT NOT NULL,      -- admin/member/child
+    role         TEXT NOT NULL DEFAULT 'member',
     preferences  JSONB DEFAULT '{}',
     access_level INT DEFAULT 1,
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
     updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- LINE 帳號映射
+CREATE TABLE line_accounts (
+    line_id    TEXT PRIMARY KEY,
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Telegram 帳號映射
+CREATE TABLE telegram_accounts (
+    chat_id    TEXT PRIMARY KEY,
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 對話歷史
 CREATE TABLE conversations (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id    TEXT REFERENCES family_members(line_id),
-    platform   TEXT NOT NULL,        -- line/imessage
+    user_id    UUID REFERENCES users(id),
+    platform   TEXT NOT NULL,
     messages   JSONB[] DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -237,8 +252,10 @@ omni-agent/
 │       │   └── standard_message.go
 │       ├── stress/
 │       │   └── manager.go        # 小腦袋機制
-│       └── forwarder/
-│           └── brain.go
+│       ├── forwarder/
+│       │   └── brain.go
+│       └── messenger/            # 回傳路徑處理模組
+│           └── messenger.go      # LINE/Telegram API 送信邏輯
 │
 ├── brain/                        # The Brain (Python)
 │   ├── Dockerfile
