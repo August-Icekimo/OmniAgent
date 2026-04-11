@@ -54,6 +54,7 @@ class GeminiClient(ModelClient):
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        thinking_budget: int | None = None,
     ) -> LLMResponse:
         contents = []
         for m in messages:
@@ -67,6 +68,12 @@ class GeminiClient(ModelClient):
             max_output_tokens=max_tokens,
         )
 
+        if thinking_budget is not None and thinking_budget >= 0:
+            generate_config.thinking_config = types.ThinkingConfig(
+                include_thoughts=True,
+                thinking_budget=thinking_budget
+            )
+
         # 嘗試使用 context cache
         cached_content = None
         if system_prompt:
@@ -74,14 +81,21 @@ class GeminiClient(ModelClient):
 
         if cached_content:
             # 透過 cached_content 呼叫，不需再送 system_instruction
+            config_params = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+                "cached_content": cached_content.name,
+            }
+            if thinking_budget is not None and thinking_budget >= 0:
+                config_params["thinking_config"] = types.ThinkingConfig(
+                    include_thoughts=True,
+                    thinking_budget=thinking_budget
+                )
+                
             response = self._client.models.generate_content(
                 model=self._model,
                 contents=contents,
-                config=types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                    cached_content=cached_content.name,
-                ),
+                config=types.GenerateContentConfig(**config_params),
             )
         else:
             # 無 cache，直接帶 system_instruction
