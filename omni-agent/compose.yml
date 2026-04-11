@@ -6,6 +6,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-omni}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: ${POSTGRES_DB:-omni_agent}
+      TZ: Asia/Taipe
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -30,6 +31,8 @@ services:
       postgres:
         condition: service_started
     restart: unless-stopped
+    environment:
+      TZ: Asia/Taipe
 
   brain:
     build:
@@ -43,8 +46,10 @@ services:
       - ./SOUL.md:/SOUL.md:ro
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
+    environment:
+      TZ: Asia/Taipei
 
   skills:
     build:
