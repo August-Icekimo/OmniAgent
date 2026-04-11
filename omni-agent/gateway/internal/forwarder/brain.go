@@ -3,13 +3,24 @@ package forwarder
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
+	"omni-agent/gateway/internal/messenger"
+	"omni-agent/gateway/internal/model"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type BrainResponse struct {
+	ReplyText string `json:"reply_text"`
+	ModelUsed string `json:"model_used"`
+	Provider  string `json:"provider"`
+}
 
 func StartBrainForwarder(db *pgxpool.Pool) {
 	brainURL := os.Getenv("BRAIN_URL")
@@ -22,18 +33,24 @@ func StartBrainForwarder(db *pgxpool.Pool) {
 	ticker := time.NewTicker(1 * time.Second)
 	go func() {
 		log.Printf("Brain Forwarder loop started.")
+		lastActivity := time.Now()
 		for range ticker.C {
-			processNextMessage(db, brainURL)
+			found := processNextMessage(db, brainURL)
+			if found {
+				lastActivity = time.Now()
+			} else if time.Since(lastActivity) >= 1*time.Minute {
+				log.Printf("Checking for next message to process (heartbeat)...")
+				lastActivity = time.Now()
+			}
 		}
 	}()
 }
 
-func processNextMessage(db *pgxpool.Pool, brainURL string) {
-	log.Printf("Checking for next message to process...")
+func processNextMessage(db *pgxpool.Pool, brainURL string) bool {
 	ctx := context.Background()
 	tx, err := db.Begin(ctx)
 	if err != nil {
-		return
+		return false
 	}
 	defer tx.Rollback(ctx)
 
@@ -50,28 +67,23 @@ func processNextMessage(db *pgxpool.Pool, brainURL string) {
 
 	if err != nil {
 		// no rows or message check failed
-		return
+		return false
 	}
 
-	log.Printf("Found message %s, sending to %s", msgId, brainURL)
+	log.Printf("Found message %s, sending to %s", msgId)
 
 	// Set to processing
 	_, err = tx.Exec(ctx, "UPDATE message_queue SET status = 'processing', locked_at = NOW() WHERE id = $1", msgId)
 	if err != nil {
-		return
+		return true
 	}
 
-	// We must commit here and do the request outside of the lock,
-	// or we hold the DB lock while making HTTP requests (bad practice).
-	// Actually, SKIP LOCKED is meant to hold the lock until the transaction finishes.
-	// We make it simple for Phase 1: hold the lock.
-	
 	resp, err := http.Post(brainURL, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		log.Printf("Error sending message %s to brain: %v", msgId, err)
 		_, _ = tx.Exec(ctx, "UPDATE message_queue SET status = 'failed' WHERE id = $1", msgId)
 		tx.Commit(ctx)
-		return
+		return true
 	}
 	defer resp.Body.Close()
 
@@ -79,10 +91,39 @@ func processNextMessage(db *pgxpool.Pool, brainURL string) {
 		log.Printf("Brain returned non-200 status for message %s: %d", msgId, resp.StatusCode)
 		_, _ = tx.Exec(ctx, "UPDATE message_queue SET status = 'failed' WHERE id = $1", msgId)
 		tx.Commit(ctx)
-		return
+		return true
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Error reading brain response for %s: %v", msgId, err)
+		return true
+	}
+
+	var brainResp BrainResponse
+	if err := json.Unmarshal(body, &brainResp); err != nil {
+		log.Printf("Error parsing brain response for %s: %v", msgId, err)
+		return true
+	}
+
+	// Delivering reply
+	var origMsg model.StandardMessage
+	_ = json.Unmarshal(payload, &origMsg)
+
+	if brainResp.ReplyText != "" {
+		log.Printf("Delivering reply to %s user %s via messenger", origMsg.Platform, origMsg.UserID)
+		err = messenger.SendReply(db, origMsg.Platform, origMsg.UserID, brainResp.ReplyText)
+		if err != nil {
+			log.Printf("Failed to deliver reply for message %s: %v", msgId, err)
+			// We might want to keep it as processing or mark as failed, 
+			// but for now let's just log it.
+		}
+	} else {
+		log.Printf("Brain returned empty reply for message %s", msgId)
 	}
 	
 	log.Printf("Successfully processed message %s by brain", msgId)
 	_, _ = tx.Exec(ctx, "UPDATE message_queue SET status = 'done' WHERE id = $1", msgId)
 	tx.Commit(ctx)
+	return true
 }
