@@ -1,15 +1,14 @@
 package handler
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 
+	"omni-agent/gateway/internal/messenger"
 	"omni-agent/gateway/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -34,23 +33,6 @@ type telegramUpdate struct {
 	} `json:"message"`
 }
 
-func sendTelegramReply(chatID string, text string) {
-	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
-	if botToken == "" {
-		log.Println("TELEGRAM_BOT_TOKEN not set, cannot send reply")
-		return
-	}
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
-	payload := map[string]string{
-		"chat_id": chatID,
-		"text":    text,
-	}
-	body, _ := json.Marshal(payload)
-	_, err := http.Post(url, "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		log.Printf("Failed to send Telegram reply: %v", err)
-	}
-}
 
 func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 	webhookSecret := os.Getenv("TELEGRAM_WEBHOOK_SECRET")
@@ -68,7 +50,7 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 
 		secretToken := c.GetHeader("X-Telegram-Bot-Api-Secret-Token")
 		if secretToken == "" || secretToken != webhookSecret {
-			log.Printf("Unauthorized Telegram webhook request, token mismatch")
+			log.Printf("Unauthorized Telegram webhook request, token mismatch. Received: [%s], Expected: [%s]", secretToken, webhookSecret)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
@@ -107,7 +89,7 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 				"INSERT INTO stranger_knocks (platform, external_id, first_message) VALUES ($1, $2, $3)",
 				"telegram", chatIDStr, msgExcerpt)
 
-			sendTelegramReply(chatIDStr, strangerReply)
+			messenger.SendReply(db, "telegram", chatIDStr, strangerReply)
 			c.JSON(http.StatusOK, gin.H{"status": "stranger_handled"})
 			return
 		}
