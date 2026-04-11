@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"os"
 
@@ -52,6 +53,7 @@ func LineWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 		expectedSignature := base64.StdEncoding.EncodeToString(expectedMAC)
 
 		if signature != expectedSignature {
+			log.Printf("LINE signature mismatch. Expected: %s..., Received: %s...", expectedSignature[:10], signature[:10])
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
 			return
 		}
