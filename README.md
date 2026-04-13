@@ -4,60 +4,67 @@ OmniAgent 是一個基於 Go 與 Python 混合架構的多平台 AI 代理系統
 
 ## 核心架構
 
-本專案採用四層解耦架構，確保系統的穩定性、隱私性與可擴展性。
+本專案採用三層核心架構 (Logical Architecture)，並部署於跨裝置的 HomeLab 節點中。
+
+### 1. 邏輯架構 (Three Tiers)
+
+1.  **Security Gateway (安全閘道)**: 處理外部流量、WAF 過慮與身分驗證。
+2.  **The Senses (感知閘道)**: 接收 Webhooks、轉換訊息協定並進行系統壓力管理。
+3.  **The Brain (核心大腦)**: 運行 LangGraph 狀態機、處理記憶檢索、調度 LLM 並執行 MCP Skills。
+
+### 2. 物理部署 (Three Nodes)
+
+*   **Synology NAS (Frontend)**: 運行 Security Gateway (Caddy + Coraza WAF)。
+*   **Debian 13 Node (主力運算)**: 運行 The Senses, The Brain 與 The Hippocampus (PostgreSQL)。
+*   **Mac Mini M4 (推論效能)**: 運行 mlx-lm 提供本地端 OpenAI-compatible API。
 
 ```mermaid
 graph TD
-    subgraph "外部平台 (Platforms)"
-        LINE["LINE"]
-        TG["Telegram"]
-        BB["BlueBubbles"]
+    subgraph "Synology NAS (Security Gateway)"
+        EXT["外部流量 (LINE, TG, etc.)"]
+        CADDY["Caddy + WAF"]
+        CADDY -- "過濾後流量" --> SENSES
     end
 
-    subgraph "邊緣閘道 (Gateway - Go)"
-        GW["API Gateway"]
-        MQ[("Message Queue<br/>(PostgreSQL)")]
+    subgraph "Debian Node (Senses & Brain)"
+        SENSES["The Senses (Go)"]
+        BRAIN["The Brain (Python)"]
+        DB[("The Hippocampus<br/>(PostgreSQL + pgvector)")]
+        
+        SENSES -- "StandardMessage" --> DB
+        DB -- "SKIP LOCKED" --> BRAIN
+        BRAIN -- "對話狀態/記憶" --> DB
     end
 
-    subgraph "核心大腦 (Brain - Python)"
-        LG[["LangGraph<br/>Agent Flow"]]
-        MEM[("Memory<br/>(pgvector)")]
+    subgraph "Mac Mini M4 (Local MLX)"
+        MLX["mlx-lm (Local LLM)"]
     end
 
-    subgraph "實體技能 (Skills - Go/MCP)"
-        SK["Skills Server"]
-        WOL["Wake-on-LAN"]
-        PM["Proxmox / HomeAssistant"]
+    subgraph "Cloud LLM (Optional)"
+        CLAUDE["Claude (Anthropic)"]
+        GEMINI["Gemini (Google)"]
     end
 
-    %% 主要流程
-    LINE --> GW
-    TG --> GW
-    BB --> GW
-    
-    %% 核心路徑 (強調)
-    GW == 寫入任務 ==> MQ
-    MQ == 輪詢任務 ==> LG
-    LG == 讀寫記憶 ==> MEM
-    LG == 驅動技能 ==> SK
-    SK --> WOL
-    SK --> PM
-    
-    %% 回應流
-    LG == 回傳回應 ==> GW
-    GW == 推送訊息 ==> LINE
-    GW == 推送訊息 ==> TG
+    %% 流程
+    SENSES -- "即時回應" --> CADDY
+    BRAIN -- "驅動技能" --> SKILLS["MCP Skills<br/>(HomeAssistant/Proxmox/WoL)"]
+    BRAIN -- "智慧路由" --> MLX
+    BRAIN -- "智慧路由" --> CLAUDE
+    BRAIN -- "智慧路由" --> GEMINI
+    CADDY -- "加密推送" --> EXT
 ```
 
 ## 核心功能
 
-1.  **多平台統一身份 (Unified Identity)**: 透過 `users` 表格，將不同平台的 `line_id` 與 `telegram_id` 綁定至同一個用戶，實現跨平台的上下文記憶與權限控管。
+1.  **多平台統一身份 (Unified Identity)**: 透過 `users` 表格與 `The Hippocampus`，將不同平台的 `line_id` 與 `telegram_id` 綁定至同一個用戶，實現跨平台的上下文記憶與權限控管。
 2.  **層次化記憶系統 (Memory System)**:
-    *   **短期記憶**: 存儲最近 5-10 輪的詳細對話。
-    *   **長期記憶**: 透過 `pgvector` 與 `Gemini-Embedding` 實現語意召回，自動摘要家人的偏好與重要瑣事。
-3.  **靈魂與人格注入 (SoulLoader)**: 透過 `SOUL.md` 與 `CLAUDE.md` 定義 AI 的語氣、情緒模組與家庭角色，讓回應不再冷冰冰。
-4.  **壓力感應機制 (StressManager)**: 自動監控系統負載與對話情境，當偵測到緊急狀況 (StressCritical) 時，會主動向管理員發起「進階模型升級」申請。
-5.  **安全與隱私**: 全機地端部署 (Self-hosted)，核心資料存於 PostgreSQL，對外僅與 LLM 供應商進行必要通訊。
+    *   **短期記憶**: 存儲最近的對話上下文於 `conversations` 表。
+    *   **長期記憶**: 透過 `pgvector` 與 `Embedding` 實現語意召回，自動摘要家人的偏好與重要瑣事。
+3.  **智慧模型路由 (ModelRouter)**: 內建原廠 SDK 適配器（Claude, Gemini, Local MLX），支援 Prompt/Context Caching 且具備自動模型升級策略 (Escalation Strategy)。
+4.  **靈魂與人格注入 (SoulLoader)**: 透過 `SOUL.md` 與資料庫動態載入，定義 AI 的人格與情緒模組，讓回應具備一致且獨特的人格特質。
+5.  **自適應壓力感應 (StressManager)**: Go Gateway 監控系統負載，動態調整處理策略 (Graceful Degradation 或 Model Escalation)。
+6.  **安全與隱私**: 全機地端部署 (Self-hosted)，核心資料與狀態均存在本地 PostgreSQL，對外通訊皆經過加密並受 WAF 保護。
+
 
 ## 快速開始
 
