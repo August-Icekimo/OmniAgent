@@ -153,7 +153,7 @@ async def initiate_escalation(app, stress_level):
         "SELECT chat_id FROM telegram_accounts ta JOIN users u ON ta.user_id = u.id WHERE u.role = 'admin'"
     )
     
-    bot_token = os.Getenv("TELEGRAM_BOT_TOKEN")
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     if bot_token:
         async with httpx.AsyncClient() as client:
             for admin in admin_chats:
