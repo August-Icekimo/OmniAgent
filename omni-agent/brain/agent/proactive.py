@@ -156,7 +156,7 @@ async def initiate_escalation(app, stress_level):
     
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     if bot_token:
-                async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient() as client:
             for admin in admin_chats:
                 await client.post(
                     f"https://api.telegram.org/bot{bot_token}/sendMessage",
