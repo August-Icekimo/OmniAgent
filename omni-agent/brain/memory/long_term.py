@@ -65,7 +65,7 @@ class LongTermMemory:
 
         try:
             # We want to force Gemini for this as per requirement
-            response = await self.router.chat(llm_messages, system_prompt=system_prompt, provider="gemini")
+            response = await self.router.chat(llm_messages, system_prompt=system_prompt)
             if response and response.content:
                 return response.content.strip()
             else:
