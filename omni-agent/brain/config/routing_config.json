@@ -17,13 +17,18 @@
       "enabled": true,
       "skip_in_test": true,
       "health_check": true
+    },
+    "gemini_oauth": {
+      "model": "gemini-2.5-pro",
+      "enabled": true,
+      "thinking_budget": 1000
     }
   },
   "routing_rules": [
     {
       "name": "image_input",
       "condition": "message_type == 'image'",
-      "provider": "gemini",
+      "provider": "gemini_oauth",
       "thinking_budget": 0,
       "priority": 100
     },
@@ -36,24 +41,29 @@
     {
       "name": "skill_execution",
       "condition": "has_skill_intent",
-      "provider": "gemini",
+      "provider": "gemini_oauth",
       "thinking_budget": 0,
       "priority": 60
     },
     {
       "name": "default",
       "condition": "*",
-      "provider": "gemini",
+      "provider": "gemini_oauth",
       "thinking_budget": -1,
       "priority": 0
     }
   ],
-  "fallback_chain": ["gemini", "claude", "local"],
+  "fallback_chain": [
+    "gemini_oauth",
+    "gemini",
+    "claude",
+    "local"
+  ],
   "upgrade_rules": [
     {
       "trigger_provider": "gemini",
       "trigger_complexity": "high",
-      "upgrade_to_provider": "gemini",
+      "upgrade_to_provider": "gemini_oauth",
       "upgrade_to_model": "gemini-2.5-pro",
       "require_confirmation": true,
       "auto_confirm_seconds": 15
@@ -61,8 +71,8 @@
     {
       "trigger_provider": "local",
       "trigger_complexity": "high",
-      "upgrade_to_provider": "gemini",
-      "upgrade_to_model": "gemini-2.5-flash",
+      "upgrade_to_provider": "gemini_oauth",
+      "upgrade_to_model": "gemini-2.5-pro",
       "require_confirmation": false
     }
   ],
