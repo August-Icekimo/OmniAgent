@@ -5,6 +5,7 @@ uvicorn[standard]>=0.34.0
 # LLM SDKs — 原廠直連
 anthropic>=0.52.0
 google-genai>=1.12.0
+google-auth>=2.35.0
 openai>=1.78.0
 
 # Database (Phase 3 預備)
