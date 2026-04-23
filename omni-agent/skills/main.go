@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"omni-agent/skills/handler"
 	"os"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type SkillRequest struct {
@@ -20,6 +24,22 @@ type SkillResponse struct {
 }
 
 func main() {
+	// Initialize DB Pool
+	user := os.Getenv("POSTGRES_USER")
+	pass := os.Getenv("POSTGRES_PASSWORD")
+	host := os.Getenv("POSTGRES_HOST")
+	port := os.Getenv("POSTGRES_PORT")
+	dbName := os.Getenv("POSTGRES_DB")
+	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s", user, pass, host, port, dbName)
+
+	db, err := pgxpool.New(context.Background(), connStr)
+	if err != nil {
+		log.Printf("Warning: Failed to connect to DB: %v. Running in stateless mode.", err)
+	} else {
+		log.Println("Successfully connected to DB")
+		defer db.Close()
+	}
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "skills"})
@@ -51,7 +71,7 @@ func main() {
 
 		switch req.Skill {
 		case "wake_on_lan":
-			result, err = handler.HandleWOL(req.Params)
+			result, err = handler.HandleWOL(db, req.Params)
 		case "cockpit":
 			result, err = handler.HandleCockpit(req.Params)
 		case "home_assistant":
@@ -75,7 +95,7 @@ func main() {
 		}
 	})
 
-	port := os.Getenv("SKILLS_PORT")
+	port = os.Getenv("SKILLS_PORT")
 	if port == "" {
 		port = "8001"
 	}
