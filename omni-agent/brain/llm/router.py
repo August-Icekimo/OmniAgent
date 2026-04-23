@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from .base import ModelClient, Message, LLMResponse
 from .claude_client import ClaudeClient
 from .gemini_client import GeminiClient
+from .oauth_gemini_client import OAuthGeminiClient, OAuthRefreshError
 from .local_client import LocalClient
 from config.config_loader import load_routing_config
 
@@ -22,8 +23,11 @@ class ModelRouter:
         self._default_provider = self._config.get("fallback_chain", ["gemini"])[0]
         
     def set_db_pool(self, db_pool):
-        """延後設定 DB pool（例如在 app lifespan 中）。"""
+        """延後設定 DB pool（例如在 app lifespan 中），並同步給支援 DB 的 Client。"""
         self._db_pool = db_pool
+        for client in self._clients.values():
+            if hasattr(client, "set_db_pool"):
+                client.set_db_pool(db_pool)
 
     def register(self, client: ModelClient) -> None:
         """註冊一個 provider。"""
@@ -199,12 +203,14 @@ class ModelRouter:
         messages: List[Message],
         *,
         system_prompt: str | None = None,
-        provider: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        provider: str | None = None,
         thinking_budget: int | None = None,
+        caller: str = "unknown"
     ) -> LLMResponse:
-        """路由請求到適當的 provider，並支援自動退路 (Fallback) 機制。"""
+        """主入口：根據配置和 fallback 鏈選擇合適的 provider。"""
+        logger.info(f"Router.chat called by {caller}")
         
         # 1. 決定候選名單
         primary_target = provider or self._default_provider
@@ -225,10 +231,16 @@ class ModelRouter:
             if not client:
                 continue
                 
+            # 獲取 provider 專屬配置 (例如 model 覆蓋)
+            provider_config = self._config.get("providers", {}).get(target, {})
+            target_model = provider_config.get("model")
+            target_thinking_budget = thinking_budget if thinking_budget is not None else provider_config.get("thinking_budget", -1)
+
             if i > 0:
                 logger.warning(f"Fallback triggered: {candidates[0]} failed (likely Quota/429), trying {target}...")
                 fallback_triggered = True
 
+            logger.info(f"Router: attempting {target} with model {target_model}")
             try:
                 # 執行對話
                 try:
@@ -237,7 +249,8 @@ class ModelRouter:
                         system_prompt=system_prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        thinking_budget=thinking_budget
+                        thinking_budget=target_thinking_budget,
+                        model=target_model
                     )
                 except TypeError:
                     # 處理不支持 thinking_budget 的 Client
@@ -254,8 +267,13 @@ class ModelRouter:
                     
                 return response
                 
-            except Exception as e:
-                logger.error(f"Provider {target} failed: {e}")
+            except (OAuthRefreshError, Exception) as e:
+                # 專門處理 OAuth 失敗，強制進入 Fallback
+                if isinstance(e, OAuthRefreshError):
+                    logger.warning(f"OAuthGeminiClient refresh failed: {e}. Falling back to API Key.")
+                else:
+                    logger.error(f"Provider {target} failed: {e}")
+                
                 last_error = e
                 # 繼續嘗試下一個候選 Provider
                 continue
@@ -272,9 +290,13 @@ def create_default_router() -> ModelRouter:
         router.register(ClaudeClient())
         logger.info("Claude provider enabled")
 
+    if os.environ.get("GEMINI_REFRESH_TOKEN"):
+        router.register(OAuthGeminiClient())
+        logger.info("Gemini OAuth provider enabled")
+
     if os.environ.get("GEMINI_API_KEY"):
         router.register(GeminiClient())
-        logger.info("Gemini provider enabled")
+        logger.info("Gemini API Key provider enabled")
 
     if os.environ.get("MLX_BASE_URL"):
         # 考慮健康檢查

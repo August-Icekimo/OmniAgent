@@ -55,7 +55,10 @@ class GeminiClient(ModelClient):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         thinking_budget: int | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
+        target_model = model or self._model
+        
         contents = []
         for m in messages:
             if m.role == Role.SYSTEM:
@@ -93,7 +96,7 @@ class GeminiClient(ModelClient):
                 )
                 
             response = self._client.models.generate_content(
-                model=self._model,
+                model=target_model,
                 contents=contents,
                 config=types.GenerateContentConfig(**config_params),
             )
@@ -102,7 +105,7 @@ class GeminiClient(ModelClient):
             if system_prompt:
                 generate_config.system_instruction = system_prompt
             response = self._client.models.generate_content(
-                model=self._model,
+                model=target_model,
                 contents=contents,
                 config=generate_config,
             )
@@ -118,7 +121,7 @@ class GeminiClient(ModelClient):
 
         return LLMResponse(
             content=response.text,
-            model=self._model,
+            model=target_model,
             provider="gemini",
             usage=usage,
             cached=cached_content is not None,

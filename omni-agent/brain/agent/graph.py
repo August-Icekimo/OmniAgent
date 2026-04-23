@@ -47,7 +47,7 @@ async def planner_node(state: AgentState):
                 "is_write": False,
                 "summary": f"分析檔案：{state['attachment']['file_name']}"
             },
-            "selected_provider": "gemini", # 預設分析
+            "selected_provider": None, # 讓 router 決定最好的 (OAuth 優先)
             "routing_reason": "attachment_routing"
         }
 
@@ -103,7 +103,7 @@ async def planner_node(state: AgentState):
             eval_response = await router.chat(
                 messages,
                 system_prompt=assessment_system,
-                provider="gemini",
+                provider=None, # 使用預設路由 (OAuth 優先)
                 temperature=0.0 # 評估需穩定
             )
             
@@ -138,7 +138,8 @@ async def planner_node(state: AgentState):
         messages,
         system_prompt=full_system,
         provider=selected_provider,
-        thinking_budget=thinking_budget
+        thinking_budget=thinking_budget,
+        caller="planner_node"
     )
     
     content = response.content
@@ -147,8 +148,11 @@ async def planner_node(state: AgentState):
     
     try:
         if "```json" in content:
-            json_str = content.split("```json")[-1].split("```")[0].strip()
-            plan = json.loads(json_str)
+            plan_candidate = json.loads(json_str)
+            if isinstance(plan_candidate, dict) and "skill" in plan_candidate:
+                plan = plan_candidate
+            else:
+                final_reply = content
         else:
             final_reply = content
     except Exception as e:
@@ -194,7 +198,7 @@ async def executor_node(state: AgentState):
     plan = state["plan"]
     
     # --- Phase 4B: File Analysis Execution ---
-    if plan["skill"] == "file_analyze":
+    if plan and plan.get("skill") == "file_analyze":
         from skills.file_analyzer import FileAnalyzer
         analyzer = FileAnalyzer(state["model_router"], db_pool=getattr(state["model_router"], "_db_pool", None))
         attachment = state["attachment"]
@@ -211,10 +215,13 @@ async def executor_node(state: AgentState):
         return {"skill_result": {"status": "error", "error": "SKILLS_URL not configured"}}
         
     try:
+        skill_name = plan.get("skill") if plan else "unknown"
+        skill_params = plan.get("params") if plan else {}
+        
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{skills_url}/skill/execute",
-                json={"skill": plan["skill"], "params": plan["params"]},
+                json={"skill": skill_name, "params": skill_params},
                 timeout=10.0
             )
             result = resp.json()
@@ -228,16 +235,16 @@ async def reporter_node(state: AgentState):
     logger.info("Entering reporter_node")
     router = state["model_router"]
     result = state["skill_result"]
-    plan = state["plan"]
+    plan = state.get("plan")
     
-    if plan["skill"] == "file_analyze":
+    if plan and plan.get("skill") == "file_analyze":
         # 如果是檔案分析，結果已經是自然語言（或錯誤訊息）
         analysis = result.get("analysis", "分析失敗")
         return {"final_reply": analysis}
 
     report_prompt = f"""
     ## Skill Result
-    Skill: {plan['skill']}
+    Skill: {plan.get('skill', 'unknown')}
     Result: {json.dumps(result)}
     
     以 Cindy 的語氣，向用戶報告執行結果。如果成功，用溫暖的方式分享；如果失敗，誠實說明原因。不要輸出 JSON。
@@ -246,7 +253,8 @@ async def reporter_node(state: AgentState):
     response = await router.chat(
         state["messages"],
         system_prompt=state["system_prompt"] + "\n\n" + report_prompt,
-        provider=state.get("selected_provider")
+        provider=state.get("selected_provider"),
+        caller="reporter_node"
     )
     return {"final_reply": response.content}
 
