@@ -30,6 +30,7 @@ class AgentState(TypedDict):
     complexity: Optional[str]
     complexity_reason: Optional[str]
     upgrade_requested: bool
+    attachment: Optional[Dict[str, Any]]
 
 # --- Nodes ---
 
@@ -37,6 +38,19 @@ async def planner_node(state: AgentState):
     """PLAN 節點：決定初始路由、評估複雜度並判斷是否需要技能。"""
     logger.info("Entering planner_node")
     
+    # --- Phase 4B: Attachment Routing ---
+    if state.get("attachment"):
+        logger.info("Attachment detected, routing to file_analyze")
+        return {
+            "plan": {
+                "skill": "file_analyze",
+                "is_write": False,
+                "summary": f"分析檔案：{state['attachment']['file_name']}"
+            },
+            "selected_provider": "gemini", # 預設分析
+            "routing_reason": "attachment_routing"
+        }
+
     # 如果已經有 plan (例如從 pending confirmation 載入)，跳過重新規劃
     if state.get("plan"):
         return {}
@@ -178,6 +192,19 @@ async def executor_node(state: AgentState):
     """EXECUTE 節點：呼叫 Skills Server。"""
     logger.info("Entering executor_node")
     plan = state["plan"]
+    
+    # --- Phase 4B: File Analysis Execution ---
+    if plan["skill"] == "file_analyze":
+        from skills.file_analyzer import FileAnalyzer
+        analyzer = FileAnalyzer(state["model_router"], db_pool=getattr(state["model_router"], "_db_pool", None))
+        attachment = state["attachment"]
+        result = await analyzer.analyze(
+            attachment["local_path"], 
+            attachment["mime_type"],
+            instruction=state["messages"][-1].content if state["messages"] else None
+        )
+        return {"skill_result": {"status": "ok", "analysis": result}}
+
     skills_url = os.getenv("SKILLS_URL")
     
     if not skills_url:
@@ -203,6 +230,11 @@ async def reporter_node(state: AgentState):
     result = state["skill_result"]
     plan = state["plan"]
     
+    if plan["skill"] == "file_analyze":
+        # 如果是檔案分析，結果已經是自然語言（或錯誤訊息）
+        analysis = result.get("analysis", "分析失敗")
+        return {"final_reply": analysis}
+
     report_prompt = f"""
     ## Skill Result
     Skill: {plan['skill']}

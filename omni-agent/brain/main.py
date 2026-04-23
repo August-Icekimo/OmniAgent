@@ -24,6 +24,13 @@ logging.basicConfig(
 logger = logging.getLogger("brain")
 
 
+class AttachmentModel(BaseModel):
+    file_id: str
+    file_name: str
+    mime_type: str
+    size_bytes: int
+    local_path: str
+
 class StandardMessage(BaseModel):
     """與 Gateway 的 StandardMessage{} 對齊。"""
     id: str
@@ -31,6 +38,7 @@ class StandardMessage(BaseModel):
     user_id: str
     message_type: str
     text: str | None = None
+    attachment: AttachmentModel | None = None
 
 
 class BrainResponse(BaseModel):
@@ -110,8 +118,8 @@ async def health():
 @app.post("/chat", response_model=BrainResponse)
 async def chat(msg: StandardMessage):
     """接收 Gateway 轉發的訊息，透過 LangGraph 處理。"""
-    if not msg.text:
-        raise HTTPException(status_code=400, detail="Empty message text")
+    if not msg.text and not msg.attachment:
+        raise HTTPException(status_code=400, detail="Empty message text and no attachment")
 
     router = app.state.router
     soul_loader = app.state.soul_loader
@@ -197,7 +205,8 @@ async def chat(msg: StandardMessage):
         "routing_reason": f"manual:confirmed" if manual_selected_provider else None,
         "complexity": None,
         "complexity_reason": None,
-        "upgrade_requested": False
+        "upgrade_requested": False,
+        "attachment": msg.attachment.model_dump() if msg.attachment else None
     }
 
     try:

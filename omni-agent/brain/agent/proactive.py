@@ -11,6 +11,7 @@ async def start_proactive_tasks(app):
     """啟動所有主動推送相關的背景任務。"""
     asyncio.create_task(stranger_summary_task(app))
     asyncio.create_task(stress_escalation_task(app))
+    asyncio.create_task(workspace_cleanup_task(app))
 
 async def stranger_summary_task(app):
     """每日 21:00 (預設) 推送陌生人訪問摘要給 Admin。"""
@@ -155,9 +156,48 @@ async def initiate_escalation(app, stress_level):
     
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     if bot_token:
-        async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient() as client:
             for admin in admin_chats:
                 await client.post(
                     f"https://api.telegram.org/bot{bot_token}/sendMessage",
                     json={"chat_id": admin['chat_id'], "text": msg, "parse_mode": "Markdown"}
                 )
+
+async def workspace_cleanup_task(app):
+    """每小時清理超過 120 小時未存取的檔案。"""
+    logger.info("Workspace cleanup task started")
+    while True:
+        try:
+            if not app.state.db_pool:
+                await asyncio.sleep(60)
+                continue
+                
+            # 1. 找出超過 120 小時未存取的記錄
+            rows = await app.state.db_pool.fetch(
+                "SELECT local_path FROM file_workspace_log WHERE last_accessed_at < NOW() - INTERVAL '120 hours'"
+            )
+            
+            if rows:
+                count = 0
+                for r in rows:
+                    path = r['local_path']
+                    try:
+                        if os.path.exists(path):
+                            os.remove(path)
+                            count += 1
+                        # 無論檔案是否存在，都從 DB 移除記錄
+                        await app.state.db_pool.execute(
+                            "DELETE FROM file_workspace_log WHERE local_path = $1",
+                            path
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to delete {path}: {e}")
+                
+                if count > 0:
+                    logger.info(f"Cleaned up {count} expired files from workspace")
+            
+            await asyncio.sleep(3600) # 每小時執行一次
+            
+        except Exception as e:
+            logger.error(f"Workspace cleanup task error: {e}")
+            await asyncio.sleep(60)
