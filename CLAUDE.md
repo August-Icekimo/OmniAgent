@@ -40,6 +40,7 @@ cd omni-agent
 cp .env.example .env
 # Fill in: ANTHROPIC_API_KEY, GEMINI_API_KEY/OAuth tokens,
 #          POSTGRES_* credentials, LINE_* and TELEGRAM_* tokens
+# Warning: If credentials are real values (not placeholders), you are in PRODUCTION. Keep them safe and secret.
 ```
 
 Database migrations run automatically from `db/migrations/*.sql` on first startup.
