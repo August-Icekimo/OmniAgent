@@ -246,6 +246,7 @@ Phase history archived at `openspec/changes/archive/`.
 - **Use vendor SDKs.** anthropic, google-genai, openai — not LangChain wrappers.
 - **System prompt = Markdown.** Never raw JSON/SQL in prompt.
 - **OpenSpec workflow.** Use `openspec/` for all spec-driven changes.
+- **WIP limit (hard).** Maximum 1 active OpenSpec change at any time. `/opsx:propose` MUST refuse if `openspec list --json` shows ≥1 active change. No `--force` override. To start a new change, archive the current one first.
 
 ---
 
@@ -270,8 +271,10 @@ openspec/
 | Command | Action |
 |---------|--------|
 | `explore` | Think mode. Read code, discuss, no implementation. |
+| `capture` | Capture a new idea into `openspec/backlog/ideas/`. |
+| `plan`    | Open a new sprint, select cards from `ready/`, produce sprint file. |
 | `propose` | Create new change with proposal + design + tasks. |
-| `apply` | Implement tasks from a change. |
+| `apply`   | Implement tasks from a change. |
 | `archive` | Archive completed change, sync delta specs. |
 
 ### Spec Domains
@@ -284,6 +287,63 @@ Each `spec.md` uses WHEN/THEN format. Example:
 - **WHEN** <condition>
 - **THEN** <expected outcome>
 ```
+
+---
+
+## 7.5 Backlog & Sprint Workflow
+
+OpenSpec covers active and archived work. Backlog covers what is being **considered** and **scheduled**.
+
+### Pipeline
+
+```
+ideas → ready → sprints (committed) → changes → changes/archive
+        │       │                     │
+        │       │                     └─ /opsx:propose (gated by WIP=1 + sprint membership)
+        │       └─ /opsx:plan
+        └─ /opsx:explore (grooming, conversational)
+```
+
+### Directory layout
+
+```
+openspec/backlog/
+├── ROADMAP.md           # quarterly themes; reference during grooming
+├── _templates/          # canonical templates for items and sprints
+├── ideas/<slug>.md      # raw captures, low bar (why+what+domain required)
+├── ready/<slug>.md      # groomed, ready to be committed (no open questions)
+└── sprints/
+    ├── <YYYY>-W<NN>.md  # current sprint
+    └── archive/         # past sprints
+```
+
+### Phase rules
+
+| Phase | Command | Required fields | WIP gate |
+|-------|---------|-----------------|----------|
+| Capture | `/opsx:capture` | why, what, domain | none |
+| Groom | `/opsx:explore <slug>` | + acceptance hints, no open questions | none |
+| Plan | `/opsx:plan` | sprint goals + committed cards | previous sprint must have retro filled |
+| Propose | `/opsx:propose <slug>` | slug must exist in current sprint | WIP=1 hard limit |
+| Apply | `/opsx:apply` | (uses existing tasks.md) | — |
+| Archive | `/opsx:archive` | (existing flow + git rm ready card) | — |
+
+### Sprint conventions
+
+- **Length**: 2 weeks
+- **Naming**: `<YYYY>-W<NN>.md` (ISO week, e.g. `2026-W17.md`)
+- **Window**: Monday → Sunday + 13 days
+- **Retro**: Filled manually at sprint end. `/opsx:plan` blocks until prior retro present.
+- **No /opsx:retro command yet** — future enhancement, hook position reserved.
+
+### Hard rules
+
+1. `changes/<slug>/` MUST originate from a card in the current sprint's `Committed` (or confirmed `Stretch`) table.
+2. Items in `ready/` MUST have empty `Open questions`.
+3. `Domain:` field MUST be one of the 8 OpenSpec domains.
+4. WIP=1: at most one non-archived `changes/<slug>/` at a time.
+5. ROADMAP.md placeholders MUST be replaced with real themes before they are referenced from a ready card.
+6. **Three-way command parity**: Updates to any `opsx` command MUST update all three sets (`.agent/`, `.gemini/`, `.claude/`) in the same commit.
 
 ---
 
