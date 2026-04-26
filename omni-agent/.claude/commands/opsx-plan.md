@@ -1,0 +1,45 @@
+Open a new sprint.
+
+I'll help you plan a new 2-week iteration by selecting cards from `openspec/backlog/ready/`.
+
+---
+
+**Steps**
+
+1. **Gate: Check for previous sprint retro**
+   - List `openspec/backlog/sprints/*.md` (excluding `archive/`).
+   - If a file exists with `status: active` OR an empty `Retro` section:
+     - Abort with: "Previous sprint `<sprint-path>` has no retro. Fill the Retro section then run again."
+
+2. **Compute current ISO week**
+   - Use system time (e.g., `date +%G-W%V`).
+   - If `openspec/backlog/sprints/<YYYY>-W<NN>.md` already exists, abort with: "Sprint for this week already exists at `<path>`."
+
+3. **Read ready cards**
+   - Scan `openspec/backlog/ready/*.md`.
+   - If empty, abort: "No ready cards found in `openspec/backlog/ready/`. Run `/opsx-explore` on ideas or move ideas to ready first."
+
+4. **Interact with user for sprint details**
+   - **Theme & Goals**: Ask the user: "What is this sprint's main objective and goals?"
+   - **Committed Cards**: Ask the user to select from all ready cards.
+   - **Stretch Cards**: Ask the user to select from remaining ready cards.
+   - **Capacity**: Ask the user: "What is the capacity for this sprint? (e.g., evenings + weekends ≈ 20h)"
+   - **Out of scope**: Ask the user (optional): "Anything explicitly out of scope?"
+
+5. **Compute window**
+   - Start: Monday of current ISO week (or today if today is Monday).
+   - End: Start + 13 days.
+
+6. **Move previous closed sprint to archive**
+   - If a closed sprint exists at `sprints/<YYYY-W<NN>>.md` (not in `archive/`), use `git mv` to move it to `sprints/archive/`.
+
+7. **Write sprint file**
+   - Use `openspec/backlog/_templates/sprint.md` as the template.
+   - Populate fields: `sprint`, `window_start`, `window_end`, `status: active`, `Theme`, `Goals`, `Committed`, `Stretch`, `Out of scope`, `Capacity`.
+   - Write to `openspec/backlog/sprints/<YYYY>-W<NN>.md`.
+
+8. **Update committed cards**
+   - For each card in the Committed table, set `status: in-sprint` in its frontmatter.
+
+9. **Show summary**
+   - Print sprint window, committed slugs, and stretch slugs.
