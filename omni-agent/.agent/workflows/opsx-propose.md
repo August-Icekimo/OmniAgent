@@ -26,13 +26,37 @@ When ready to implement, run /opsx:apply
 
    **IMPORTANT**: Do NOT proceed without understanding what the user wants to build.
 
-2. **Create the change directory**
+2. **Pre-flight Check A — WIP limit (hard)**
+   - Run `openspec list --json`
+   - Count the number of changes where `archived` is `false`.
+   - If count >= 1:
+     - Abort with message: "WIP limit reached. Active change: `<existing-slug>`. Archive it first: `/opsx:archive <existing-slug>`. No `--force` override is permitted (per AGENT.md §6)."
+     - Exit.
+
+3. **Pre-flight Check B — Slug continuity from sprint**
+   - Find the active sprint file in `openspec/backlog/sprints/` (latest `<YYYY>-W<NN>.md` not in `archive/`).
+   - If none: abort with "No active sprint. Run `/opsx:plan` first."
+   - Read its `Committed` and `Stretch` tables.
+   - If the proposed slug is NOT in either table:
+     - Abort with: "Slug `<slug>` is not in current sprint `<sprint>`. Either `/opsx:capture` + `/opsx:plan` first, or pick a slug from the sprint."
+   - If the slug is in `Stretch` (but not `Committed`):
+     - Use the **AskUserQuestion tool** to confirm: "Slug `<slug>` is in the Stretch tier — proceed anyway? (y/N)"
+     - If the user says no, abort.
+
+4. **Create the change directory**
    ```bash
    openspec new change "<name>"
    ```
    This creates a scaffolded change at `openspec/changes/<name>/` with `.openspec.yaml`.
 
-3. **Get the artifact build order**
+   **Post-creation updates**:
+   - If `openspec/backlog/ready/<name>.md` exists:
+     - Update its frontmatter `status` to `in-progress`.
+   - In the active sprint file:
+     - Find the row for this slug in the `Committed` or `Stretch` table.
+     - Update the `OpenSpec change` column with the new change name (e.g., `openspec/changes/<name>/`).
+
+5. **Get the artifact build order**
    ```bash
    openspec status --change "<name>" --json
    ```
@@ -72,7 +96,7 @@ When ready to implement, run /opsx:apply
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Show final status**
+6. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```
