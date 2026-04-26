@@ -75,6 +75,19 @@ Archive a completed change in the experimental workflow.
    mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>
    ```
 
+5.5 **Remove ready card and annotate sprint**
+   - Check if `openspec/backlog/ready/<name>.md` exists.
+   - If yes:
+     - `git rm openspec/backlog/ready/<name>.md`
+     - Add to summary: "Removed ready card: `openspec/backlog/ready/<name>.md`"
+   - If no:
+     - Log debug: "No matching ready card to remove (likely a legacy/manual change)"
+     - Continue without warning.
+
+   - Update the active sprint file (latest `<YYYY>-W<NN>.md` in `openspec/backlog/sprints/`):
+     - In the `Committed` table, find the row for this slug.
+     - Append `(archived YYYY-MM-DD)` to the `OpenSpec change` column.
+
 6. **Display summary**
 
    Show archive completion summary including:
