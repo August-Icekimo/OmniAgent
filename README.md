@@ -94,3 +94,5 @@ podman compose up -d --build
 
 ## 開發與 phase 歷程
 詳細的開發歷程、測試結果與技術規格請參閱 `docs/` 資料夾下的 walkthrough 與 feature 文件。
+
+專案長期規劃與各 Phase 主題請參閱 [ROADMAP.md](omni-agent/openspec/backlog/ROADMAP.md)。
