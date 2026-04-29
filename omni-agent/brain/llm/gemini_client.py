@@ -1,6 +1,7 @@
 """Gemini provider — 使用 google-genai SDK，啟用 Context Caching。"""
 
 import os
+import base64
 from google import genai
 from google.genai import types
 from .base import ModelClient, Message, LLMResponse, Role
@@ -64,7 +65,33 @@ class GeminiClient(ModelClient):
             if m.role == Role.SYSTEM:
                 continue
             role = "user" if m.role == Role.USER else "model"
-            contents.append(types.Content(role=role, parts=[types.Part(text=m.content)]))
+
+            parts = []
+            if isinstance(m.content, str):
+                parts.append(types.Part(text=m.content))
+            elif isinstance(m.content, list):
+                # Handle multimodal parts (Phase 4D)
+                for p in m.content:
+                    if p.get("type") == "text":
+                        parts.append(types.Part(text=p["text"]))
+                    elif p.get("type") == "image":
+                        data = p["data"]
+                        if isinstance(data, str):
+                            data = base64.b64decode(data)
+                        parts.append(types.Part(inline_data=types.Blob(
+                            mime_type=p["mime_type"],
+                            data=data
+                        )))
+                    elif p.get("type") == "audio":
+                        data = p["data"]
+                        if isinstance(data, str):
+                            data = base64.b64decode(data)
+                        parts.append(types.Part(inline_data=types.Blob(
+                            mime_type=p["mime_type"],
+                            data=data
+                        )))
+
+            contents.append(types.Content(role=role, parts=parts))
 
         generate_config = types.GenerateContentConfig(
             temperature=temperature,

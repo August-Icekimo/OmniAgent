@@ -30,10 +30,13 @@ class AttachmentModel(BaseModel):
     mime_type: str
     size_bytes: int
     local_path: str
+    media_type: str | None = None
+    duration_ms: int | None = None
 
 class StandardMessage(BaseModel):
     """與 Gateway 的 StandardMessage{} 對齊。"""
     id: str
+    source_message_id: str | None = None
     platform: str
     user_id: str
     message_type: str
@@ -197,6 +200,7 @@ async def chat(msg: StandardMessage):
     # 6. 執行 LangGraph
     state = {
         "user_id": msg.user_id,
+        "source_message_id": msg.source_message_id,
         "platform": msg.platform,
         "messages": llm_messages,
         "system_prompt": system_prompt,
@@ -212,6 +216,16 @@ async def chat(msg: StandardMessage):
     try:
         final_state = await app.state.graph.ainvoke(state)
         
+        # 7. 檢查多模態失敗回傳 (Phase 4D Honest Fallback)
+        if msg.attachment and not final_state.get("final_reply"):
+             # 此情況可能發生在所有 Gemini Provider 都失敗時
+             logger.error(f"Multimodal processing failed for message {msg.id}")
+             return BrainResponse(
+                 reply_text="我這邊看不到/聽不到,可以打字告訴我嗎?",
+                 model_used="fallback", provider="none",
+                 routing_reason="multimodal_failure"
+             )
+
         # 8. 儲存本輪對話 (含 Metadata)
         reply_text = final_state.get("final_reply", "Sorry, I encountered an internal error.")
         provider_name = final_state.get("selected_provider") or router._default_provider

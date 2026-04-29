@@ -8,8 +8,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"omni-agent/gateway/internal/messenger"
@@ -18,6 +20,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var (
+	tgAckMap  = make(map[string]time.Time)
+	tgAckLock sync.Mutex
 )
 
 type telegramUpdate struct {
@@ -42,6 +49,24 @@ type telegramUpdate struct {
 			MimeType string `json:"mime_type"`
 			FileSize int64  `json:"file_size"`
 		} `json:"document"`
+		Voice *struct {
+			FileID   string `json:"file_id"`
+			Duration int    `json:"duration"`
+			MimeType string `json:"mime_type"`
+			FileSize int64  `json:"file_size"`
+		} `json:"voice"`
+		Sticker *struct {
+			FileID     string `json:"file_id"`
+			IsAnimated bool   `json:"is_animated"`
+			IsVideo    bool   `json:"is_video"`
+			FileSize   int64  `json:"file_size"`
+		} `json:"sticker"`
+		Animation *struct {
+			FileID   string `json:"file_id"`
+			FileName string `json:"file_name"`
+			MimeType string `json:"mime_type"`
+			FileSize int64  `json:"file_size"`
+		} `json:"animation"`
 		Caption string `json:"caption"`
 	} `json:"message"`
 }
@@ -115,26 +140,75 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 		if payload.Message.Text != "" {
 			messageType = "text"
 			text = payload.Message.Text
-		} else if payload.Message.Document != nil {
-			messageType = "file"
+		} else if payload.Message.Voice != nil {
+			messageType = "voice"
 			text = payload.Message.Caption
-			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Document.FileID, payload.Message.Document.FileName, payload.Message.Document.MimeType, payload.Message.Document.FileSize)
+			sendMultimodalAck(db, "telegram", chatIDStr, "voice")
+			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Voice.FileID, "voice.ogg", "audio/ogg", payload.Message.Voice.FileSize)
 			if err != nil {
-				log.Printf("File download failed: %v", err)
-				messenger.SendReply(db, "telegram", chatIDStr, "檔案下載失敗："+err.Error())
+				handleDownloadError(db, chatIDStr, err)
 				c.JSON(http.StatusOK, gin.H{"status": "download_failed"})
 				return
 			}
+			attachment.MediaType = "voice"
+			attachment.DurationMs = payload.Message.Voice.Duration * 1000
 		} else if len(payload.Message.Photo) > 0 {
 			messageType = "image"
 			text = payload.Message.Caption
+			sendMultimodalAck(db, "telegram", chatIDStr, "image")
 			// Pick the largest photo
 			photo := payload.Message.Photo[len(payload.Message.Photo)-1]
 			fileName := fmt.Sprintf("photo_%s.jpg", photo.FileUniqueID)
 			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), photo.FileID, fileName, "image/jpeg", photo.FileSize)
 			if err != nil {
-				log.Printf("Photo download failed: %v", err)
-				messenger.SendReply(db, "telegram", chatIDStr, "圖片下載失敗："+err.Error())
+				handleDownloadError(db, chatIDStr, err)
+				c.JSON(http.StatusOK, gin.H{"status": "download_failed"})
+				return
+			}
+			attachment.MediaType = "image"
+		} else if payload.Message.Sticker != nil {
+			messageType = "sticker"
+			sendMultimodalAck(db, "telegram", chatIDStr, "image")
+			fileName := "sticker.webp"
+			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Sticker.FileID, fileName, "image/webp", payload.Message.Sticker.FileSize)
+			if err != nil {
+				handleDownloadError(db, chatIDStr, err)
+				c.JSON(http.StatusOK, gin.H{"status": "download_failed"})
+				return
+			}
+			attachment.MediaType = "sticker"
+			// Animated stickers: extracted first frame will be handled in brain or here?
+			// Spec: "sticker's static representation (webp or first frame for animated stickers) is downloaded"
+			if payload.Message.Sticker.IsAnimated || payload.Message.Sticker.IsVideo {
+				firstFramePath := attachment.LocalPath + ".jpg"
+				if err := extractFirstFrame(attachment.LocalPath, firstFramePath); err == nil {
+					attachment.LocalPath = firstFramePath
+					attachment.MimeType = "image/jpeg"
+				}
+			}
+		} else if payload.Message.Animation != nil {
+			messageType = "animation"
+			text = payload.Message.Caption
+			sendMultimodalAck(db, "telegram", chatIDStr, "image")
+			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Animation.FileID, "animation.mp4", "video/mp4", payload.Message.Animation.FileSize)
+			if err != nil {
+				handleDownloadError(db, chatIDStr, err)
+				c.JSON(http.StatusOK, gin.H{"status": "download_failed"})
+				return
+			}
+			attachment.MediaType = "animation"
+			// Extract first frame for GIF/Animation
+			firstFramePath := attachment.LocalPath + ".jpg"
+			if err := extractFirstFrame(attachment.LocalPath, firstFramePath); err == nil {
+				attachment.LocalPath = firstFramePath
+				attachment.MimeType = "image/jpeg"
+			}
+		} else if payload.Message.Document != nil {
+			messageType = "file"
+			text = payload.Message.Caption
+			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Document.FileID, payload.Message.Document.FileName, payload.Message.Document.MimeType, payload.Message.Document.FileSize)
+			if err != nil {
+				handleDownloadError(db, chatIDStr, err)
 				c.JSON(http.StatusOK, gin.H{"status": "download_failed"})
 				return
 			}
@@ -146,12 +220,13 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 		// 3. Queue Message
 		msgId := uuid.New().String()
 		stdMsg := model.StandardMessage{
-			ID:          msgId,
-			Platform:    "telegram",
-			UserID:      userID.String(),
-			MessageType: messageType,
-			Text:        text,
-			Attachment:  attachment,
+			ID:              msgId,
+			SourceMessageID: strconv.Itoa(payload.Message.MessageID),
+			Platform:        "telegram",
+			UserID:          userID.String(),
+			MessageType:     messageType,
+			Text:            text,
+			Attachment:      attachment,
 		}
 
 		payloadJSON, _ := json.Marshal(stdMsg)
@@ -177,6 +252,43 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	}
+}
+
+func sendMultimodalAck(db *pgxpool.Pool, platform, chatID, modality string) {
+	tgAckLock.Lock()
+	defer tgAckLock.Unlock()
+
+	lastAck, ok := tgAckMap[chatID]
+	if ok && time.Since(lastAck) < 5*time.Second {
+		return
+	}
+
+	var ackText string
+	switch modality {
+	case "voice":
+		ackText = "嗯,收到了,正在聽..."
+	case "image", "sticker", "animation":
+		ackText = "嗯,收到了,正在看..."
+	default:
+		ackText = "嗯,收到了,正在看..."
+	}
+
+	messenger.SendReply(db, platform, chatID, ackText)
+	tgAckMap[chatID] = time.Now()
+}
+
+func handleDownloadError(db *pgxpool.Pool, chatID string, err error) {
+	log.Printf("Download failed: %v", err)
+	errMsg := "下載失敗"
+	if err.Error() == "檔案大小超過 10MB 限制" {
+		errMsg = "檔案大小超過 10MB 限制，我現在還吞不下這麼大的東西..."
+	}
+	messenger.SendReply(db, "telegram", chatID, errMsg)
+}
+
+func extractFirstFrame(inputPath, outputPath string) error {
+	cmd := exec.Command("ffmpeg", "-i", inputPath, "-frames:v", "1", "-update", "1", outputPath, "-y")
+	return cmd.Run()
 }
 
 func downloadTelegramFile(ctx context.Context, userID, fileID, fileName, mimeType string, fileSize int64) (*model.Attachment, error) {
