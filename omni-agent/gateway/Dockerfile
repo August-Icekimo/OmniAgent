@@ -8,7 +8,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /gateway ./cmd/server/main.go
 
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates tzdata ffmpeg
+RUN apk --no-cache add ca-certificates tzdata ffmpeg vips-tools
 
 WORKDIR /root/
 COPY --from=builder /gateway .

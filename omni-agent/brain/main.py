@@ -268,7 +268,9 @@ async def chat(msg: StandardMessage):
         )
 
     except Exception as e:
+        import traceback
         logger.error(f"Agent graph execution failed: {e}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=502, detail=f"Agent error: {e}")
 async def auto_confirm_model_upgrade(app, orig_msg: StandardMessage, state: dict):
     """15秒自動確認升級背景任務。"""

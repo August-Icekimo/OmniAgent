@@ -90,6 +90,14 @@ class GeminiClient(ModelClient):
                             mime_type=p["mime_type"],
                             data=data
                         )))
+                    elif p.get("type") == "video":
+                        data = p["data"]
+                        if isinstance(data, str):
+                            data = base64.b64decode(data)
+                        parts.append(types.Part(inline_data=types.Blob(
+                            mime_type=p["mime_type"],
+                            data=data
+                        )))
 
             contents.append(types.Content(role=role, parts=parts))
 

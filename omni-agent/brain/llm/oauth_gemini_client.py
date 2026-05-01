@@ -190,6 +190,14 @@ class OAuthGeminiClient(ModelClient):
                             mime_type=p["mime_type"],
                             data=data
                         )))
+                    elif p.get("type") == "video":
+                        data = p["data"]
+                        if isinstance(data, str):
+                            data = base64.b64decode(data)
+                        parts.append(types.Part(inline_data=types.Blob(
+                            mime_type=p["mime_type"],
+                            data=data
+                        )))
 
             contents.append(types.Content(role=role, parts=parts))
 
@@ -207,7 +215,11 @@ class OAuthGeminiClient(ModelClient):
         # Handle Context Caching
         cached_content = None
         if system_prompt:
-            cached_content = await self._get_or_create_cache(client, system_prompt)
+            try:
+                cached_content = await self._get_or_create_cache(client, system_prompt)
+            except Exception as e:
+                logger.warning(f"Context caching failed (non-blocking): {e}")
+                cached_content = None
 
         if cached_content:
             config_params = {

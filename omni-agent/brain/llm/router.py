@@ -42,7 +42,7 @@ class ModelRouter:
         """根據上下文決定初始 provider。"""
         # 0. 多模態強制路由至 Gemini (Phase 4D)
         msg_type = context.get("message_type", "text")
-        if msg_type in ["image", "voice", "sticker", "animation"]:
+        if msg_type in ["image", "voice", "sticker", "animation", "video"]:
             # 優先使用 OAuth Gemini，若無則用 API Key 版
             if "gemini_oauth" in self._clients:
                 return {"provider": "gemini_oauth", "reason": f"multimodal:{msg_type}"}

@@ -7,6 +7,7 @@ import pypdf
 import pandas as pd
 import json
 from llm import Message, Role, ModelRouter
+from .tgs_converter import tgs_to_png
 
 logger = logging.getLogger("brain.skills.file_analyzer")
 
@@ -44,8 +45,10 @@ class FileAnalyzer:
         try:
             if media_type == "voice":
                 return await self._analyze_voice(local_path, mime_type, instruction, user_id, platform, source_message_id)
-            elif media_type == "sticker":
-                return await self._analyze_sticker(local_path, mime_type, instruction)
+            elif media_type == "video":
+                return await self._analyze_video(local_path, mime_type, instruction)
+            elif media_type == "sticker" or media_type == "tgs_sticker":
+                return await self._analyze_sticker(local_path, mime_type, instruction, media_type)
             elif media_type == "animation":
                 return await self._analyze_animation(local_path, mime_type, instruction)
             elif mime_type == "application/pdf":
@@ -169,11 +172,24 @@ class FileAnalyzer:
             logger.error(f"Voice analysis error: {e}")
             return f"語音處理失敗：{str(e)}"
 
-    async def _analyze_sticker(self, path: str, mime_type: str, instruction: Optional[str]) -> str:
+    async def _analyze_sticker(self, path: str, mime_type: str, instruction: Optional[str], media_type: str) -> str:
         """貼圖語義分析。"""
+        if media_type == "tgs_sticker":
+            png_path = path + ".png"
+            if tgs_to_png(path, png_path):
+                path = png_path
+                mime_type = "image/png"
+            else:
+                return "[sticker: 動態 Lottie 貼圖, 無法解析內容]"
+
         try:
             with open(path, "rb") as f:
                 image_data = base64.b64encode(f.read()).decode("utf-8")
+
+            # 清理暫存檔 (如果是我們產生的 PNG)
+            if media_type == "tgs_sticker" and path.endswith(".png") and os.path.exists(path):
+                # 我們稍後再刪除，先讀取完
+                pass
 
             prompt = "這是貼圖，請描述其情緒、物體或意圖。請以簡短的一句話回傳，格式如：[sticker: 某某動作，表達某某心情]。"
             content = [
@@ -181,11 +197,34 @@ class FileAnalyzer:
                 {"type": "text", "text": prompt}
             ]
 
-            response = await self.router.chat([Message(role=Role.USER, content=content)], provider="gemini")
+            response = await self.router.chat([Message(role=Role.USER, content=content)])
+            
+            # 清理 TGS 轉換產生的暫存 PNG
+            if media_type == "tgs_sticker" and path.endswith(".png") and os.path.exists(path):
+                os.remove(path)
+
             return response.content
         except Exception as e:
             logger.error(f"Sticker analysis error: {e}")
             return "[sticker]"
+
+    async def _analyze_video(self, path: str, mime_type: str, instruction: Optional[str]) -> str:
+        """使用 Gemini Native Video 分析影片內容。"""
+        try:
+            with open(path, "rb") as f:
+                video_data = base64.b64encode(f.read()).decode("utf-8")
+
+            prompt = f"請分析這段影片，並根據指示進行回答。\n指示：{instruction or '請描述影片發生的事情與主要人物/物體'}"
+            content = [
+                {"type": "video", "mime_type": mime_type, "data": video_data},
+                {"type": "text", "text": prompt}
+            ]
+
+            response = await self.router.chat([Message(role=Role.USER, content=content)])
+            return response.content
+        except Exception as e:
+            logger.error(f"Video analysis error: {e}")
+            return f"影片分析失敗：{str(e)}"
 
     async def _analyze_animation(self, path: str, mime_type: str, instruction: Optional[str]) -> str:
         """GIF/動畫首幀分析。"""
@@ -199,7 +238,7 @@ class FileAnalyzer:
                 {"type": "text", "text": prompt}
             ]
 
-            response = await self.router.chat([Message(role=Role.USER, content=content)], provider="gemini")
+            response = await self.router.chat([Message(role=Role.USER, content=content)])
             return response.content
         except Exception as e:
             logger.error(f"Animation analysis error: {e}")
@@ -223,8 +262,7 @@ class FileAnalyzer:
             prompt = f"請分析以下表格資料，並根據指示進行解讀。\n指示：{instruction or '請總結這些資料的內容與趨勢'}\n\n資料摘要：\n{data_str}"
             
             response = await self.router.chat(
-                [Message(role=Role.USER, content=prompt)],
-                provider="gemini"
+                [Message(role=Role.USER, content=prompt)]
             )
             return response.content
         except Exception as e:

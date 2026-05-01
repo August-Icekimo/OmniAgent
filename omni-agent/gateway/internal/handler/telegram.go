@@ -67,6 +67,11 @@ type telegramUpdate struct {
 			MimeType string `json:"mime_type"`
 			FileSize int64  `json:"file_size"`
 		} `json:"animation"`
+		Video *struct {
+			FileID   string `json:"file_id"`
+			Duration int    `json:"duration"`
+			FileSize int64  `json:"file_size"`
+		} `json:"video"`
 		Caption string `json:"caption"`
 	} `json:"message"`
 }
@@ -177,9 +182,10 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 				return
 			}
 			attachment.MediaType = "sticker"
-			// Animated stickers: extracted first frame will be handled in brain or here?
-			// Spec: "sticker's static representation (webp or first frame for animated stickers) is downloaded"
-			if payload.Message.Sticker.IsAnimated || payload.Message.Sticker.IsVideo {
+			// Check for TGS (Gzipped JSON)
+			if isGzipped(attachment.LocalPath) {
+				attachment.MediaType = "tgs_sticker"
+			} else if payload.Message.Sticker.IsAnimated || payload.Message.Sticker.IsVideo {
 				firstFramePath := attachment.LocalPath + ".jpg"
 				if err := extractFirstFrame(attachment.LocalPath, firstFramePath); err == nil {
 					attachment.LocalPath = firstFramePath
@@ -203,6 +209,18 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 				attachment.LocalPath = firstFramePath
 				attachment.MimeType = "image/jpeg"
 			}
+		} else if payload.Message.Video != nil {
+			messageType = "video"
+			text = payload.Message.Caption
+			sendMultimodalAck(db, "telegram", chatIDStr, "image")
+			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Video.FileID, "video.mp4", "video/mp4", payload.Message.Video.FileSize)
+			if err != nil {
+				handleDownloadError(db, chatIDStr, err)
+				c.JSON(http.StatusOK, gin.H{"status": "download_failed"})
+				return
+			}
+			attachment.MediaType = "video"
+			attachment.DurationMs = payload.Message.Video.Duration * 1000
 		} else if payload.Message.Document != nil {
 			messageType = "file"
 			text = payload.Message.Caption
@@ -211,6 +229,17 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 				handleDownloadError(db, chatIDStr, err)
 				c.JSON(http.StatusOK, gin.H{"status": "download_failed"})
 				return
+			}
+			// Handle HEIF/HEIC Conversion
+			ext := filepath.Ext(attachment.FileName)
+			if ext == ".heic" || ext == ".heif" {
+				jpgPath := attachment.LocalPath + ".jpg"
+				if err := convertHeifToJpg(attachment.LocalPath, jpgPath); err == nil {
+					attachment.LocalPath = jpgPath
+					attachment.MimeType = "image/jpeg"
+					attachment.MediaType = "image"
+					messageType = "image"
+				}
 			}
 		} else {
 			c.JSON(http.StatusOK, gin.H{"status": "ignored"})
@@ -289,6 +318,27 @@ func handleDownloadError(db *pgxpool.Pool, chatID string, err error) {
 func extractFirstFrame(inputPath, outputPath string) error {
 	cmd := exec.Command("ffmpeg", "-i", inputPath, "-frames:v", "1", "-update", "1", outputPath, "-y")
 	return cmd.Run()
+}
+
+func convertHeifToJpg(inputPath, outputPath string) error {
+	cmd := exec.Command("vips", "copy", inputPath, outputPath)
+	return cmd.Run()
+}
+
+func isGzipped(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	buf := make([]byte, 2)
+	_, err = f.Read(buf)
+	if err != nil {
+		return false
+	}
+	// Magic bytes for GZIP: 1F 8B
+	return buf[0] == 0x1f && buf[1] == 0x8b
 }
 
 func downloadTelegramFile(ctx context.Context, userID, fileID, fileName, mimeType string, fileSize int64) (*model.Attachment, error) {
