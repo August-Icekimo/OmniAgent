@@ -15,6 +15,7 @@ logger = logging.getLogger("brain.agent")
 class AgentState(TypedDict):
     """LangGraph 狀態結構。"""
     user_id: str
+    source_message_id: Optional[str]
     platform: str
     messages: List[Message]
     system_prompt: str
@@ -197,15 +198,20 @@ async def executor_node(state: AgentState):
     logger.info("Entering executor_node")
     plan = state["plan"]
     
-    # --- Phase 4B: File Analysis Execution ---
+    # --- Phase 4B/4D: File Analysis Execution ---
     if plan and plan.get("skill") == "file_analyze":
         from skills.file_analyzer import FileAnalyzer
         analyzer = FileAnalyzer(state["model_router"], db_pool=getattr(state["model_router"], "_db_pool", None))
         attachment = state["attachment"]
         result = await analyzer.analyze(
-            attachment["local_path"], 
+            attachment["local_path"],
             attachment["mime_type"],
-            instruction=state["messages"][-1].content if state["messages"] else None
+            instruction=state["messages"][-1].content if state["messages"] else None,
+            media_type=attachment.get("media_type"),
+            user_id=state.get("user_id"),
+            platform=state.get("platform"),
+            source_message_id=state.get("source_message_id"),
+            duration_ms=attachment.get("duration_ms"),
         )
         return {"skill_result": {"status": "ok", "analysis": result}}
 
@@ -238,9 +244,25 @@ async def reporter_node(state: AgentState):
     plan = state.get("plan")
     
     if plan and plan.get("skill") == "file_analyze":
-        # 如果是檔案分析，結果已經是自然語言（或錯誤訊息）
+        # 取得分析結果（例如貼圖描述、語音逐字稿或影片摘要）
         analysis = result.get("analysis", "分析失敗")
-        return {"final_reply": analysis}
+        
+        # 簡化感官輸入：直接將解析結果作為環境感知注入
+        perception_context = f"\n\n[環境感知：你剛剛看到/聽到了使用者傳來的內容：{analysis}]\n請直接針對此感官體驗進行回覆。"
+        
+        response = await router.chat(
+            state["messages"],
+            system_prompt=state["system_prompt"] + perception_context,
+            provider=state.get("selected_provider"),
+            caller="reporter_node_perception"
+        )
+        
+        reply = response.content
+        if not reply or len(reply.strip()) == 0:
+            logger.warning("Cindy soul response was empty, using analysis result as fallback.")
+            reply = f"嗯……我看到了這個貼圖：{analysis}"
+            
+        return {"final_reply": reply}
 
     report_prompt = f"""
     ## Skill Result

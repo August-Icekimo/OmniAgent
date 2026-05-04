@@ -1,5 +1,6 @@
 import os
 import time
+import base64
 import logging
 import json
 import httpx
@@ -164,7 +165,41 @@ class OAuthGeminiClient(ModelClient):
             if m.role == Role.SYSTEM:
                 continue
             role = "user" if m.role == Role.USER else "model"
-            contents.append(types.Content(role=role, parts=[types.Part(text=m.content)]))
+
+            parts = []
+            if isinstance(m.content, str):
+                parts.append(types.Part(text=m.content))
+            elif isinstance(m.content, list):
+                # Handle multimodal parts (Phase 4D)
+                for p in m.content:
+                    if p.get("type") == "text":
+                        parts.append(types.Part(text=p["text"]))
+                    elif p.get("type") == "image":
+                        data = p["data"]
+                        if isinstance(data, str):
+                            data = base64.b64decode(data)
+                        parts.append(types.Part(inline_data=types.Blob(
+                            mime_type=p["mime_type"],
+                            data=data
+                        )))
+                    elif p.get("type") == "audio":
+                        data = p["data"]
+                        if isinstance(data, str):
+                            data = base64.b64decode(data)
+                        parts.append(types.Part(inline_data=types.Blob(
+                            mime_type=p["mime_type"],
+                            data=data
+                        )))
+                    elif p.get("type") == "video":
+                        data = p["data"]
+                        if isinstance(data, str):
+                            data = base64.b64decode(data)
+                        parts.append(types.Part(inline_data=types.Blob(
+                            mime_type=p["mime_type"],
+                            data=data
+                        )))
+
+            contents.append(types.Content(role=role, parts=parts))
 
         generate_config = types.GenerateContentConfig(
             temperature=temperature,
@@ -180,7 +215,11 @@ class OAuthGeminiClient(ModelClient):
         # Handle Context Caching
         cached_content = None
         if system_prompt:
-            cached_content = await self._get_or_create_cache(client, system_prompt)
+            try:
+                cached_content = await self._get_or_create_cache(client, system_prompt)
+            except Exception as e:
+                logger.warning(f"Context caching failed (non-blocking): {e}")
+                cached_content = None
 
         if cached_content:
             config_params = {

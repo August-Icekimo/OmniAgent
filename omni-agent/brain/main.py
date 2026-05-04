@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import os
 import json
@@ -24,16 +25,36 @@ logging.basicConfig(
 logger = logging.getLogger("brain")
 
 
+def _media_placeholder(attachment: "AttachmentModel") -> str:
+    """Generate a content-addressed placeholder for an attachment.
+    Uses SHA-256 of file bytes (first 512 KB) so the same media maps to
+    the same hash regardless of who sent it — enabling future cache lookup.
+    Falls back to hashing the file_id if the file is unreadable.
+    """
+    try:
+        h = hashlib.sha256()
+        with open(attachment.local_path, "rb") as f:
+            h.update(f.read(524288))
+        digest = h.hexdigest()[:12]
+    except Exception:
+        digest = hashlib.sha256(attachment.file_id.encode()).hexdigest()[:12]
+    media_type = attachment.media_type or "file"
+    return f"[{media_type}:{digest}]"
+
+
 class AttachmentModel(BaseModel):
     file_id: str
     file_name: str
     mime_type: str
     size_bytes: int
     local_path: str
+    media_type: str | None = None
+    duration_ms: int | None = None
 
 class StandardMessage(BaseModel):
     """與 Gateway 的 StandardMessage{} 對齊。"""
     id: str
+    source_message_id: str | None = None
     platform: str
     user_id: str
     message_type: str
@@ -189,14 +210,23 @@ async def chat(msg: StandardMessage):
         history = await short_term.load(msg.user_id, limit=5)
 
     # 組合訊息
+    # Build user content: text, or hash placeholder when attachment-only,
+    # or both when a caption accompanies the attachment.
+    if msg.attachment:
+        placeholder = _media_placeholder(msg.attachment)
+        user_content = f"{msg.text} {placeholder}".strip() if msg.text else placeholder
+    else:
+        user_content = msg.text
+
     llm_messages = []
     for h in history:
         llm_messages.append(Message(role=Role(h['role']), content=h['content']))
-    llm_messages.append(Message(role=Role.USER, content=msg.text))
+    llm_messages.append(Message(role=Role.USER, content=user_content))
 
     # 6. 執行 LangGraph
     state = {
         "user_id": msg.user_id,
+        "source_message_id": msg.source_message_id,
         "platform": msg.platform,
         "messages": llm_messages,
         "system_prompt": system_prompt,
@@ -212,6 +242,16 @@ async def chat(msg: StandardMessage):
     try:
         final_state = await app.state.graph.ainvoke(state)
         
+        # 7. 檢查多模態失敗回傳 (Phase 4D Honest Fallback)
+        if msg.attachment and not final_state.get("final_reply"):
+             # 此情況可能發生在所有 Gemini Provider 都失敗時
+             logger.error(f"Multimodal processing failed for message {msg.id}")
+             return BrainResponse(
+                 reply_text="我這邊看不到/聽不到,可以打字告訴我嗎?",
+                 model_used="fallback", provider="none",
+                 routing_reason="multimodal_failure"
+             )
+
         # 8. 儲存本輪對話 (含 Metadata)
         reply_text = final_state.get("final_reply", "Sorry, I encountered an internal error.")
         provider_name = final_state.get("selected_provider") or router._default_provider
@@ -220,7 +260,7 @@ async def chat(msg: StandardMessage):
 
         if pool:
             round_messages = [
-                {"role": "user", "content": msg.text},
+                {"role": "user", "content": user_content},
                 {"role": "assistant", "content": reply_text}
             ]
             metadata = {
@@ -254,7 +294,9 @@ async def chat(msg: StandardMessage):
         )
 
     except Exception as e:
+        import traceback
         logger.error(f"Agent graph execution failed: {e}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=502, detail=f"Agent error: {e}")
 async def auto_confirm_model_upgrade(app, orig_msg: StandardMessage, state: dict):
     """15秒自動確認升級背景任務。"""
