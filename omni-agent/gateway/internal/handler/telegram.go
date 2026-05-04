@@ -76,7 +76,6 @@ type telegramUpdate struct {
 	} `json:"message"`
 }
 
-
 func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 	webhookSecret := os.Getenv("TELEGRAM_WEBHOOK_SECRET")
 	strangerReply := os.Getenv("TELEGRAM_STRANGER_REPLY")
@@ -301,9 +300,9 @@ func sendMultimodalAck(db *pgxpool.Pool, platform, chatID, modality string) {
 	var ackText string
 	switch modality {
 	case "voice":
-		ackText = "嗯,收到了,正在聽..."
+		ackText = "👂..."
 	default:
-		ackText = "嗯,收到了,正在看..."
+		ackText = "👀..."
 	}
 
 	messenger.SendReply(db, platform, chatID, ackText)
@@ -402,7 +401,7 @@ func downloadTelegramFile(ctx context.Context, userID, fileID, fileName, mimeTyp
 
 	// 2. Download the file
 	downloadURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", botToken, getFileResp.Result.FilePath)
-	
+
 	// Create context with 4s timeout as per NF-01
 	downloadCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()

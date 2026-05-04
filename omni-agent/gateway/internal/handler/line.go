@@ -183,9 +183,9 @@ func sendLineMultimodalAck(db *pgxpool.Pool, platform, lineID, modality string) 
 	var ackText string
 	switch modality {
 	case "voice":
-		ackText = "嗯,收到了,正在聽..."
+		ackText = "👂..."
 	default:
-		ackText = "嗯,收到了,正在看..."
+		ackText = "👀..."
 	}
 
 	messenger.SendReply(db, platform, lineID, ackText)
