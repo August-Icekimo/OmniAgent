@@ -100,8 +100,27 @@ Cindy currently understands only text. Family members regularly send images, voi
 **Acceptance Criteria:**
 - [ ] Given a sticker message from either platform, when processed by the Brain, then the sticker image is sent to Gemini with a prompt that elicits a semantic description (mood, object, intent).
 - [ ] Given Gemini returns a semantic description, when used in conversation context, then the description (not the raw image reference) is what subsequent LLM turns see — e.g. `[sticker: a cat raising its paw, conveying greeting/hello]`.
-- [ ] Given the same sticker is sent multiple times by the same user, when processed, then a per-sticker-asset cache (keyed by file hash) MAY be used to skip re-sending to Gemini; if implemented, the cache TTL is at least 30 days.
+- [ ] Given the same sticker is sent multiple times by the same user, when processed, then a per-sticker-asset cache (keyed by SHA-256 content hash — same hash format used by the content-hash placeholder system) MAY be used to skip re-sending to Gemini; if implemented, the cache TTL is at least 30 days. The `media_cache` table design is specified in Task: Content-hash placeholder for attachment messages.
 - [ ] Edge case: Given a sticker that Gemini fails to interpret, when fallback runs, then the placeholder `[sticker]` is used and the conversation continues without a hard failure.
+
+---
+
+### Task: Content-hash placeholder for attachment messages
+
+**Requirement:** When a user sends an attachment (image, voice, sticker, animation, or other media), the Brain must store a content-addressed hash placeholder in the conversation record rather than a null `content` field. This placeholder is both a human-readable reference in conversation history and the foundation for a future `media_cache` lookup table that enables sticker re-use and cross-session media recall.
+
+**Acceptance Criteria:**
+- [ ] Given a message with an attachment and no text, when saved to the conversation, then the user message `content` is `[media_type:HASH]` (e.g. `[sticker:a3b4c5d6e7f8]`) rather than `null`.
+- [ ] Given a message with both text and an attachment (captioned media), when saved, then the user message `content` is `"{text} [{media_type}:{hash}]"`.
+- [ ] Given the same sticker file is received from two different users, when placeholders are generated, then both produce the same HASH — confirming the hash is content-addressed (SHA-256 of file bytes), not identity-addressed (file_id).
+- [ ] Given the attachment file is unreadable at placeholder-generation time (e.g. already cleaned up), when the fallback runs, then the hash is derived from `file_id` and the placeholder is still generated without raising an error.
+- [ ] Given the placeholder appears in conversation history, when Cindy processes a follow-up text message, then the LLM context includes the placeholder string so Cindy can reference what media was previously seen without re-reading the file.
+- [ ] Given a future `media_cache` table is introduced with schema `(hash TEXT PK, media_type TEXT, description TEXT, sticker_id TEXT, created_at TIMESTAMPTZ)`, when populated from the placeholder index, then the same hash key used in conversation history resolves directly to the cached Gemini description — enabling both deduplication and outbound sticker re-use.
+
+**Implementation notes:**
+- Hash is SHA-256 of first 512 KB of file bytes, hex-truncated to 12 characters.
+- `_media_placeholder()` helper lives in `brain/main.py` and is called before LangGraph invocation.
+- The `media_cache` table is **not** created in Phase 4D — it is deferred to Phase 5 or Phase 5.5 when sticker sending and preference learning are addressed.
 
 ---
 

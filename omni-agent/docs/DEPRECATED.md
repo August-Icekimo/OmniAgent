@@ -13,6 +13,8 @@ The following legacy documentation files have been migrated to the [OpenSpec](fi
 | `docs/feature_omni-agent-phase4a.md` | `changes/archive/phase4a-langgraph/` | Migrated & Deleted |
 | `docs/feature_omni-agent-phase4b-file-analysis.md` | `changes/archive/phase4b-file-analysis/` | Migrated & Deleted |
 | `docs/jules_phase2_spec.md` | `changes/archive/phase2-brain-skeleton/` | Migrated & Deleted |
+| `docs/feature_omni-agent-phase4d-multimodal-input.md` | `changes/archive/phase4d-multimodal/spec.md` | Migrated & Deleted |
+| `docs/feature_omni-agent-phase4d-multimodal-input-test.md` | `changes/archive/phase4d-multimodal/test.md` | Migrated & Deleted |
 
 ## Usage Note
 

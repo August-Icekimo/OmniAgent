@@ -40,6 +40,14 @@ class ModelRouter:
 
     def select_provider(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """根據上下文決定初始 provider。"""
+        # 0. 多模態強制路由至 Gemini (Phase 4D)
+        msg_type = context.get("message_type", "text")
+        if msg_type in ["image", "voice", "sticker", "animation", "video"]:
+            # 優先使用 OAuth Gemini，若無則用 API Key 版
+            if "gemini_oauth" in self._clients:
+                return {"provider": "gemini_oauth", "reason": f"multimodal:{msg_type}"}
+            return {"provider": "gemini", "reason": f"multimodal:{msg_type}"}
+
         # 1. 檢查規則匹配
         rules = self._config.get("routing_rules", [])
         
@@ -226,10 +234,22 @@ class ModelRouter:
         last_error = None
         fallback_triggered = False
         
+        msg_type = "text"
+        for m in messages:
+            if hasattr(m, 'content') and isinstance(m.content, list):
+                 # This is a complex multimodal message part list (Phase 4D)
+                 msg_type = "multimodal"
+                 break
+
         for i, target in enumerate(candidates):
             client = self._clients.get(target)
             if not client:
                 continue
+
+            # Phase 4D: 如果是多模態且當前 Provider 不支援，則跳過 (除了 Gemini)
+            if msg_type == "multimodal" and target not in ["gemini", "gemini_oauth"]:
+                 logger.warning(f"Provider {target} does not support native multimodal in this chain. Skipping.")
+                 continue
                 
             # 獲取 provider 專屬配置 (例如 model 覆蓋)
             provider_config = self._config.get("providers", {}).get(target, {})
@@ -279,6 +299,11 @@ class ModelRouter:
                 continue
         
         # 如果所有候選 Provider 都失敗了
+        if msg_type == "multimodal":
+             # Phase 4D: 多模態失敗不拋出通用錯誤，讓調用端能處理 Honest Fallback
+             logger.error(f"Multimodal routing failed after trying all candidates: {candidates}")
+             return LLMResponse(content="", model="none", provider="none", usage={})
+
         raise RuntimeError(f"All providers in fallback chain failed. Last error: {last_error}")
 
 def create_default_router() -> ModelRouter:

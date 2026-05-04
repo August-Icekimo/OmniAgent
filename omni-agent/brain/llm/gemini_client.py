@@ -4,6 +4,7 @@ import os
 from google import genai
 from google.genai import types
 from .base import ModelClient, Message, LLMResponse, Role
+from .gemini_utils import build_gemini_parts
 
 
 class GeminiClient(ModelClient):
@@ -64,7 +65,8 @@ class GeminiClient(ModelClient):
             if m.role == Role.SYSTEM:
                 continue
             role = "user" if m.role == Role.USER else "model"
-            contents.append(types.Content(role=role, parts=[types.Part(text=m.content)]))
+
+            contents.append(types.Content(role=role, parts=build_gemini_parts(m.content)))
 
         generate_config = types.GenerateContentConfig(
             temperature=temperature,

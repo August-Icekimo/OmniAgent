@@ -11,6 +11,7 @@ from google.genai import types
 from google.oauth2.credentials import Credentials
 
 from .base import ModelClient, Message, LLMResponse, Role
+from .gemini_utils import build_gemini_parts
 
 logger = logging.getLogger("brain.llm.oauth_gemini_client")
 
@@ -164,7 +165,8 @@ class OAuthGeminiClient(ModelClient):
             if m.role == Role.SYSTEM:
                 continue
             role = "user" if m.role == Role.USER else "model"
-            contents.append(types.Content(role=role, parts=[types.Part(text=m.content)]))
+
+            contents.append(types.Content(role=role, parts=build_gemini_parts(m.content)))
 
         generate_config = types.GenerateContentConfig(
             temperature=temperature,
@@ -180,7 +182,11 @@ class OAuthGeminiClient(ModelClient):
         # Handle Context Caching
         cached_content = None
         if system_prompt:
-            cached_content = await self._get_or_create_cache(client, system_prompt)
+            try:
+                cached_content = await self._get_or_create_cache(client, system_prompt)
+            except Exception as e:
+                logger.warning(f"Context caching failed (non-blocking): {e}")
+                cached_content = None
 
         if cached_content:
             config_params = {
