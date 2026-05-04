@@ -2,6 +2,8 @@ import os
 import gzip
 import json
 import logging
+
+# Requires lottie>=0.6.11 — API: Animation.load(dict), export_png(anim, path, frame=N)
 from lottie.exporters.cairo import export_png
 from lottie.objects import Animation
 
