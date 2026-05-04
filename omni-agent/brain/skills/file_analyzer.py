@@ -5,7 +5,6 @@ import uuid
 from typing import Optional
 import pypdf
 import pandas as pd
-import json
 from llm import Message, Role, ModelRouter
 from .tgs_converter import tgs_to_png
 
@@ -128,7 +127,7 @@ class FileAnalyzer:
             logger.error(f"Image analysis error: {e}")
             return f"圖片分析失敗：{str(e)}"
 
-    async def _analyze_voice(self, path: str, mime_type: str, instruction: Optional[str], user_id: str, platform: str, source_msg_id: str, duration_ms: Optional[int] = None) -> str:
+    async def _analyze_voice(self, path: str, mime_type: str, _instruction: Optional[str], user_id: str, platform: str, source_msg_id: str, duration_ms: Optional[int] = None) -> str:
         """語音訊息處理：轉錄、儲存並產生回應。"""
         try:
             with open(path, "rb") as f:
@@ -136,7 +135,12 @@ class FileAnalyzer:
                 audio_data = base64.b64encode(audio_bytes).decode("utf-8")
 
             # 請求 Gemini 進行轉錄與回應
-            prompt = "這是一段語音訊息。請先提供逐字稿（Transcript），然後根據內容進行回應。請務必遵守以下格式：\nTranscript: [逐字稿內容]\nReply: [回應內容]"
+            # Delimiters are chosen to be unlikely to appear verbatim in speech.
+            prompt = (
+                "這是一段語音訊息。\n"
+                "請以下列格式回覆，完整保留分隔符：\n"
+                "===TRANSCRIPT===\n[逐字稿]\n===REPLY===\n[你的回應]"
+            )
             content = [
                 {"type": "audio", "mime_type": mime_type, "data": audio_data},
                 {"type": "text", "text": prompt}
@@ -148,30 +152,40 @@ class FileAnalyzer:
             # 解析轉錄內容與回應
             transcript = "[no_speech_detected]"
             reply = full_text
-            if "Transcript:" in full_text and "Reply:" in full_text:
-                parts = full_text.split("Reply:", 1)
-                reply = parts[1].strip()
-                transcript = parts[0].replace("Transcript:", "").strip()
+            if "===TRANSCRIPT===" in full_text and "===REPLY===" in full_text:
+                try:
+                    t_part = full_text.split("===TRANSCRIPT===", 1)[1]
+                    transcript, reply = t_part.split("===REPLY===", 1)
+                    transcript = transcript.strip()
+                    reply = reply.strip()
+                except (ValueError, IndexError):
+                    pass
 
             # 儲存至 DB (Phase 4D)
             if self.db_pool and user_id:
                 try:
-                    await self.db_pool.execute(
-                        """
-                        INSERT INTO voice_transcripts (user_id, source_platform, source_message_id, transcript, audio_path, duration_ms)
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                        """,
-                        uuid.UUID(user_id), platform, source_msg_id or "unknown", transcript, path, duration_ms
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to store voice transcript: {e}")
+                    uid = uuid.UUID(user_id)
+                except (ValueError, TypeError):
+                    logger.warning(f"Non-UUID user_id; skipping voice transcript save: {user_id}")
+                    uid = None
+                if uid:
+                    try:
+                        await self.db_pool.execute(
+                            """
+                            INSERT INTO voice_transcripts (user_id, source_platform, source_message_id, transcript, audio_path, duration_ms)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            """,
+                            uid, platform, source_msg_id or "unknown", transcript, path, duration_ms
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to store voice transcript: {e}")
 
             return reply
         except Exception as e:
             logger.error(f"Voice analysis error: {e}")
             return f"語音處理失敗：{str(e)}"
 
-    async def _analyze_sticker(self, path: str, mime_type: str, instruction: Optional[str], media_type: str) -> str:
+    async def _analyze_sticker(self, path: str, mime_type: str, _instruction: Optional[str], media_type: str) -> str:
         """貼圖語義分析。"""
         if media_type == "tgs_sticker":
             png_path = path + ".png"
@@ -184,11 +198,6 @@ class FileAnalyzer:
         try:
             with open(path, "rb") as f:
                 image_data = base64.b64encode(f.read()).decode("utf-8")
-
-            # 清理暫存檔 (如果是我們產生的 PNG)
-            if media_type == "tgs_sticker" and path.endswith(".png") and os.path.exists(path):
-                # 我們稍後再刪除，先讀取完
-                pass
 
             prompt = "這是貼圖，請描述其情緒、物體或意圖。請以簡短的一句話回傳，格式如：[sticker: 某某動作，表達某某心情]。"
             content = [
@@ -225,7 +234,7 @@ class FileAnalyzer:
             logger.error(f"Video analysis error: {e}")
             return f"影片分析失敗：{str(e)}"
 
-    async def _analyze_animation(self, path: str, mime_type: str, instruction: Optional[str]) -> str:
+    async def _analyze_animation(self, path: str, mime_type: str, _instruction: Optional[str]) -> str:
         """GIF/動畫首幀分析。"""
         try:
             with open(path, "rb") as f:
