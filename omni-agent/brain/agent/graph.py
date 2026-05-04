@@ -246,13 +246,19 @@ async def reporter_node(state: AgentState):
     if plan and plan.get("skill") == "file_analyze":
         # 取得分析結果（例如貼圖描述、語音逐字稿或影片摘要）
         analysis = result.get("analysis", "分析失敗")
-        
-        # 簡化感官輸入：直接將解析結果作為環境感知注入
-        perception_context = f"\n\n[環境感知：你剛剛看到/聽到了使用者傳來的內容：{analysis}]\n請直接針對此感官體驗進行回覆。"
-        
+
+        # 將感知結果注入到最後一則 user message 中，優先級高於對話歷史模式。
+        # 若只放在 system prompt 末尾，模型容易跟著歷史 pattern 走（例如前一筆是貓，就把所有貼圖都說成貓）。
+        messages = list(state["messages"])
+        if messages:
+            last = messages[-1]
+            messages[-1] = Message(role=last.role, content=f"{last.content}\n\n[感知：{analysis}]")
+
+        perception_system = state["system_prompt"] + "\n\n請根據訊息中 [感知] 標記的實際內容回覆，不要依賴對話歷史中的推測。"
+
         response = await router.chat(
-            state["messages"],
-            system_prompt=state["system_prompt"] + perception_context,
+            messages,
+            system_prompt=perception_system,
             provider=state.get("selected_provider"),
             caller="reporter_node_perception"
         )
