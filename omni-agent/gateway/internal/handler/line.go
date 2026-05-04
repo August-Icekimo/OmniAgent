@@ -141,7 +141,12 @@ func LineWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 				Attachment:      attachment,
 			}
 
-			payloadJSON, _ := json.Marshal(stdMsg)
+			payloadJSON, marshalErr := json.Marshal(stdMsg)
+			if marshalErr != nil {
+				log.Printf("Marshal error for LINE message: %v", marshalErr)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "marshal error"})
+				return
+			}
 
 			_, err = db.Exec(c.Request.Context(),
 				"INSERT INTO message_queue (id, payload, priority, status) VALUES ($1, $2, $3, $4)",
@@ -170,8 +175,8 @@ func sendLineMultimodalAck(db *pgxpool.Pool, platform, lineID, modality string) 
 	lineAckLock.Lock()
 	defer lineAckLock.Unlock()
 
-	lastAck, ok := lineAckMap[lineID]
-	if ok && time.Since(lastAck) < 5*time.Second {
+	now := time.Now()
+	if lastAck, ok := lineAckMap[lineID]; ok && now.Sub(lastAck) < 5*time.Second {
 		return
 	}
 
@@ -179,21 +184,29 @@ func sendLineMultimodalAck(db *pgxpool.Pool, platform, lineID, modality string) 
 	switch modality {
 	case "voice":
 		ackText = "嗯,收到了,正在聽..."
-	case "image", "sticker":
-		ackText = "嗯,收到了,正在看..."
 	default:
 		ackText = "嗯,收到了,正在看..."
 	}
 
 	messenger.SendReply(db, platform, lineID, ackText)
-	lineAckMap[lineID] = time.Now()
+	lineAckMap[lineID] = now
+
+	// Evict entries older than 30s to bound map growth.
+	cutoff := now.Add(-30 * time.Second)
+	for k, v := range lineAckMap {
+		if v.Before(cutoff) {
+			delete(lineAckMap, k)
+		}
+	}
 }
 
 func downloadLineContent(ctx context.Context, userID, messageID, fileName, mimeType string) (*model.Attachment, error) {
 	token := os.Getenv("LINE_CHANNEL_ACCESS_TOKEN")
 	url := fmt.Sprintf("https://api-data.line.me/v2/bot/message/%s/content", messageID)
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	dlCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(dlCtx, "GET", url, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -218,7 +231,9 @@ func downloadLineSticker(ctx context.Context, userID, packageID, stickerID strin
 	// LINE CDN pattern for stickers: https://stickershop.line-scdn.net/stickershop/v1/sticker/{stickerId}/iphone/sticker@2x.png
 	url := fmt.Sprintf("https://stickershop.line-scdn.net/stickershop/v1/sticker/%s/iphone/sticker@2x.png", stickerID)
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	dlCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(dlCtx, "GET", url, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err

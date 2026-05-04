@@ -235,6 +235,7 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 			if ext == ".heic" || ext == ".heif" {
 				jpgPath := attachment.LocalPath + ".jpg"
 				if err := convertHeifToJpg(attachment.LocalPath, jpgPath); err == nil {
+					os.Remove(attachment.LocalPath)
 					attachment.LocalPath = jpgPath
 					attachment.MimeType = "image/jpeg"
 					attachment.MediaType = "image"
@@ -258,7 +259,12 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 			Attachment:      attachment,
 		}
 
-		payloadJSON, _ := json.Marshal(stdMsg)
+		payloadJSON, marshalErr := json.Marshal(stdMsg)
+		if marshalErr != nil {
+			log.Printf("Marshal error for telegram message: %v", marshalErr)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "marshal error"})
+			return
+		}
 
 		_, err = db.Exec(c.Request.Context(),
 			"INSERT INTO message_queue (id, payload, priority, status) VALUES ($1, $2, $3, $4)",
@@ -287,8 +293,8 @@ func sendMultimodalAck(db *pgxpool.Pool, platform, chatID, modality string) {
 	tgAckLock.Lock()
 	defer tgAckLock.Unlock()
 
-	lastAck, ok := tgAckMap[chatID]
-	if ok && time.Since(lastAck) < 5*time.Second {
+	now := time.Now()
+	if lastAck, ok := tgAckMap[chatID]; ok && now.Sub(lastAck) < 5*time.Second {
 		return
 	}
 
@@ -296,14 +302,20 @@ func sendMultimodalAck(db *pgxpool.Pool, platform, chatID, modality string) {
 	switch modality {
 	case "voice":
 		ackText = "嗯,收到了,正在聽..."
-	case "image", "sticker", "animation":
-		ackText = "嗯,收到了,正在看..."
 	default:
 		ackText = "嗯,收到了,正在看..."
 	}
 
 	messenger.SendReply(db, platform, chatID, ackText)
-	tgAckMap[chatID] = time.Now()
+	tgAckMap[chatID] = now
+
+	// Evict entries older than 30s to bound map growth.
+	cutoff := now.Add(-30 * time.Second)
+	for k, v := range tgAckMap {
+		if v.Before(cutoff) {
+			delete(tgAckMap, k)
+		}
+	}
 }
 
 func handleDownloadError(db *pgxpool.Pool, chatID string, err error) {
@@ -354,7 +366,13 @@ func downloadTelegramFile(ctx context.Context, userID, fileID, fileName, mimeTyp
 
 	// 1. Get file path from Telegram
 	getFilePathURL := fmt.Sprintf("https://api.telegram.org/bot%s/getFile?file_id=%s", botToken, fileID)
-	resp, err := http.Get(getFilePathURL)
+	getCtx, getCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer getCancel()
+	getReq, err := http.NewRequestWithContext(getCtx, "GET", getFilePathURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(getReq)
 	if err != nil {
 		return nil, err
 	}
