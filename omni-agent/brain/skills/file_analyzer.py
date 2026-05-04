@@ -18,7 +18,7 @@ class FileAnalyzer:
         self.router = router
         self.db_pool = db_pool
 
-    async def analyze(self, local_path: str, mime_type: str, instruction: Optional[str] = None, media_type: Optional[str] = None, user_id: Optional[str] = None, platform: Optional[str] = None, source_message_id: Optional[str] = None) -> str:
+    async def analyze(self, local_path: str, mime_type: str, instruction: Optional[str] = None, media_type: Optional[str] = None, user_id: Optional[str] = None, platform: Optional[str] = None, source_message_id: Optional[str] = None, duration_ms: Optional[int] = None) -> str:
         """依 MIME type 或 Media type 路由至對應 handler 進行分析。"""
         logger.info(f"Analyzing file: {local_path} ({mime_type}, media_type={media_type})")
         
@@ -44,7 +44,7 @@ class FileAnalyzer:
         # 3. 執行分析
         try:
             if media_type == "voice":
-                return await self._analyze_voice(local_path, mime_type, instruction, user_id, platform, source_message_id)
+                return await self._analyze_voice(local_path, mime_type, instruction, user_id, platform, source_message_id, duration_ms)
             elif media_type == "video":
                 return await self._analyze_video(local_path, mime_type, instruction)
             elif media_type == "sticker" or media_type == "tgs_sticker":
@@ -128,7 +128,7 @@ class FileAnalyzer:
             logger.error(f"Image analysis error: {e}")
             return f"圖片分析失敗：{str(e)}"
 
-    async def _analyze_voice(self, path: str, mime_type: str, instruction: Optional[str], user_id: str, platform: str, source_msg_id: str) -> str:
+    async def _analyze_voice(self, path: str, mime_type: str, instruction: Optional[str], user_id: str, platform: str, source_msg_id: str, duration_ms: Optional[int] = None) -> str:
         """語音訊息處理：轉錄、儲存並產生回應。"""
         try:
             with open(path, "rb") as f:
@@ -156,13 +156,12 @@ class FileAnalyzer:
             # 儲存至 DB (Phase 4D)
             if self.db_pool and user_id:
                 try:
-                    # 獲取 duration (可能需要從 metadata 傳入，這裡先暫留)
                     await self.db_pool.execute(
                         """
-                        INSERT INTO voice_transcripts (user_id, source_platform, source_message_id, transcript, audio_path)
-                        VALUES ($1, $2, $3, $4, $5)
+                        INSERT INTO voice_transcripts (user_id, source_platform, source_message_id, transcript, audio_path, duration_ms)
+                        VALUES ($1, $2, $3, $4, $5, $6)
                         """,
-                        uuid.UUID(user_id), platform, source_msg_id or "unknown", transcript, path
+                        uuid.UUID(user_id), platform, source_msg_id or "unknown", transcript, path, duration_ms
                     )
                 except Exception as e:
                     logger.error(f"Failed to store voice transcript: {e}")

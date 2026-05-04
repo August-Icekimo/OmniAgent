@@ -204,13 +204,14 @@ async def executor_node(state: AgentState):
         analyzer = FileAnalyzer(state["model_router"], db_pool=getattr(state["model_router"], "_db_pool", None))
         attachment = state["attachment"]
         result = await analyzer.analyze(
-            attachment["local_path"], 
+            attachment["local_path"],
             attachment["mime_type"],
             instruction=state["messages"][-1].content if state["messages"] else None,
             media_type=attachment.get("media_type"),
             user_id=state.get("user_id"),
             platform=state.get("platform"),
-            source_message_id=state.get("source_message_id")
+            source_message_id=state.get("source_message_id"),
+            duration_ms=attachment.get("duration_ms"),
         )
         return {"skill_result": {"status": "ok", "analysis": result}}
 

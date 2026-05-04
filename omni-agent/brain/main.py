@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import os
 import json
@@ -22,6 +23,23 @@ logging.basicConfig(
     format='{"time":"%(asctime)s","level":"%(levelname)s","module":"%(name)s","msg":"%(message)s"}',
 )
 logger = logging.getLogger("brain")
+
+
+def _media_placeholder(attachment: "AttachmentModel") -> str:
+    """Generate a content-addressed placeholder for an attachment.
+    Uses SHA-256 of file bytes (first 512 KB) so the same media maps to
+    the same hash regardless of who sent it — enabling future cache lookup.
+    Falls back to hashing the file_id if the file is unreadable.
+    """
+    try:
+        h = hashlib.sha256()
+        with open(attachment.local_path, "rb") as f:
+            h.update(f.read(524288))
+        digest = h.hexdigest()[:12]
+    except Exception:
+        digest = hashlib.sha256(attachment.file_id.encode()).hexdigest()[:12]
+    media_type = attachment.media_type or "file"
+    return f"[{media_type}:{digest}]"
 
 
 class AttachmentModel(BaseModel):
@@ -192,10 +210,18 @@ async def chat(msg: StandardMessage):
         history = await short_term.load(msg.user_id, limit=5)
 
     # 組合訊息
+    # Build user content: text, or hash placeholder when attachment-only,
+    # or both when a caption accompanies the attachment.
+    if msg.attachment:
+        placeholder = _media_placeholder(msg.attachment)
+        user_content = f"{msg.text} {placeholder}".strip() if msg.text else placeholder
+    else:
+        user_content = msg.text
+
     llm_messages = []
     for h in history:
         llm_messages.append(Message(role=Role(h['role']), content=h['content']))
-    llm_messages.append(Message(role=Role.USER, content=msg.text))
+    llm_messages.append(Message(role=Role.USER, content=user_content))
 
     # 6. 執行 LangGraph
     state = {
@@ -234,7 +260,7 @@ async def chat(msg: StandardMessage):
 
         if pool:
             round_messages = [
-                {"role": "user", "content": msg.text},
+                {"role": "user", "content": user_content},
                 {"role": "assistant", "content": reply_text}
             ]
             metadata = {
