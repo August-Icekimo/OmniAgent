@@ -1,4 +1,9 @@
-"""Local MLX provider — 使用 openai SDK 連接 Mac Mini mlx-lm server。"""
+"""Local MLX provider — 使用 openai SDK 連接 chrysoberyl Rapid-MLX server。
+
+chrysoberyl (MacBook Pro M4) 跑 gemma-4-26b (4-bit)，benchmarked:
+  - 34.5 tok/s, TTFT ~120 ms (no-think), ~2.2 s (think, 18× slower)
+thinking_budget > 0 才啟用 enable_thinking；預設關閉。
+"""
 
 import os
 from openai import AsyncOpenAI
@@ -6,20 +11,22 @@ from .base import ModelClient, Message, LLMResponse
 
 
 class LocalClient(ModelClient):
-    """本地 MLX 客戶端，透過 OpenAI-compatible API 連接 Mac Mini。"""
+    """本地 MLX 客戶端，透過 OpenAI-compatible API 連接 chrysoberyl。"""
 
     def __init__(
         self,
         model: str | None = None,
         base_url: str | None = None,
+        thinking_budget: int = -1,
     ):
         self._base_url = base_url or os.environ.get(
-            "MLX_BASE_URL", "http://mac-mini.local:8086/v1"
+            "MLX_BASE_URL", "http://100.88.136.117:8000/v1"
         )
-        self._model = model or os.environ.get("MLX_MODEL", "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit")
+        self._model = model or os.environ.get("MLX_MODEL", "gemma-4-26b")
+        self._thinking_budget = thinking_budget
         self._client = AsyncOpenAI(
             base_url=self._base_url,
-            api_key="not-needed",  # mlx-lm 不需要 API key
+            api_key="not-needed",
         )
 
     async def chat(
@@ -29,6 +36,8 @@ class LocalClient(ModelClient):
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        thinking_budget: int | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
         oai_messages = []
         if system_prompt:
@@ -36,11 +45,15 @@ class LocalClient(ModelClient):
         for m in messages:
             oai_messages.append({"role": m.role.value, "content": m.content})
 
+        effective_budget = thinking_budget if thinking_budget is not None else self._thinking_budget
+        extra = {"enable_thinking": True} if effective_budget > 0 else {}
+
         response = await self._client.chat.completions.create(
-            model=self._model,
+            model=model or self._model,
             messages=oai_messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            **({"extra_body": extra} if extra else {}),
         )
 
         choice = response.choices[0]

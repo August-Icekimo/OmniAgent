@@ -324,12 +324,14 @@ def create_default_router() -> ModelRouter:
         logger.info("Gemini API Key provider enabled")
 
     if os.environ.get("MLX_BASE_URL"):
-        # 考慮健康檢查
         is_test = os.environ.get("OMNI_ENV") == "test"
         if is_test:
             logger.info("Local MLX provider disabled in test mode")
         else:
-            client = LocalClient()
+            local_config = config.get("providers", {}).get("local", {})
+            client = LocalClient(
+                thinking_budget=local_config.get("thinking_budget", -1),
+            )
             router.register(client)
             logger.info("Local MLX provider enabled")
 
