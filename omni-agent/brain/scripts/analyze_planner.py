@@ -48,49 +48,47 @@ def main():
     try:
         for line in input_source:
             total_lines += 1
-            try:
-                # The requirement says JSON logs.
-                # Sometimes logging formats wrap the message.
-                # We'll try to find a JSON-looking part or parse the whole line.
-                data = None
-                line = line.strip()
-                if not line:
-                    continue
+            data = None
+            line = line.strip()
+            if not line:
+                continue
 
-                # Check if the line itself is a JSON object from the logger
+            # Find the first { and last } to extract JSON block
+            start_idx = line.find("{")
+            if start_idx != -1:
                 try:
-                    log_entry = json.loads(line)
-                    # The instrumentation will log a JSON string as the message
-                    if isinstance(log_entry, dict) and "msg" in log_entry:
-                        try:
-                            data = json.loads(log_entry["msg"])
-                        except:
-                            # Maybe the msg IS the planner_timing?
-                            if "planner_timing" in log_entry.get("msg", ""):
-                                # We'll need to be more clever if it's just a string containing JSON
-                                pass
+                    end_idx = line.rfind("}")
+                    parsed = json.loads(line[start_idx:end_idx+1])
+                    if isinstance(parsed, dict):
+                        # If the log entry has a 'msg' field, it might contain the actual JSON record
+                        if "msg" in parsed:
+                            msg_content = parsed["msg"]
+                            if isinstance(msg_content, str) and "{" in msg_content:
+                                m_start = msg_content.find("{")
+                                m_end = msg_content.rfind("}")
+                                try:
+                                    data = json.loads(msg_content[m_start:m_end+1])
+                                except json.JSONDecodeError:
+                                    data = parsed
+                            else:
+                                data = parsed
+                        else:
+                            data = parsed
                 except json.JSONDecodeError:
-                    # Try parsing the whole line as data directly
-                    try:
-                        data = json.loads(line)
-                    except:
-                        pass
+                    pass
 
-                if not data or data.get("event") != "planner_timing":
-                    skipped_lines += 1
-                    continue
-
-                is_cold = data.get("is_cold_start", False)
-                if is_cold:
-                    cold_starts.append(data)
-                else:
-                    steady_state.append(data)
-                    for key in span_keys:
-                        if key in data:
-                            steady_spans[key].append(data[key])
-
-            except Exception:
+            if not data or not isinstance(data, dict) or data.get("event") != "planner_timing":
                 skipped_lines += 1
+                continue
+
+            is_cold = data.get("is_cold_start", False)
+            if is_cold:
+                cold_starts.append(data)
+            else:
+                steady_state.append(data)
+                for key in span_keys:
+                    if key in data:
+                        steady_spans[key].append(data[key])
 
     finally:
         if input_source is not sys.stdin:
