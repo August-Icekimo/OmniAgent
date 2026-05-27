@@ -50,29 +50,49 @@ def main():
             if not line:
                 continue
 
-            # Find the first { and last } to extract JSON block
-            start_idx = line.find("{")
-            if start_idx != -1:
-                try:
-                    end_idx = line.rfind("}")
-                    parsed = json.loads(line[start_idx:end_idx+1])
-                    if isinstance(parsed, dict):
-                        # If the log entry has a 'msg' field, it might contain the actual JSON record
-                        if "msg" in parsed:
-                            msg_content = parsed["msg"]
-                            if isinstance(msg_content, str) and "{" in msg_content:
-                                m_start = msg_content.find("{")
-                                m_end = msg_content.rfind("}")
-                                try:
-                                    data = json.loads(msg_content[m_start:m_end+1])
-                                except json.JSONDecodeError:
+            # Fast path: brain logger emits msg as a raw (unescaped) JSON object,
+            # making the outer wrapper invalid JSON.  The line ends with `}"}`:
+            #   inner-JSON-close `}` → msg-quote-close `"` → outer-JSON-close `}`
+            # Search for the inner record directly and find its real close brace.
+            for marker in ('{"event": "planner_timing"', '{"event":"planner_timing"'):
+                pt_start = line.find(marker)
+                if pt_start != -1:
+                    # Try to find the inner JSON close: pattern `}"}` marks end of msg value
+                    inner_close = line.rfind('}"')
+                    if inner_close > pt_start:
+                        pt_end = inner_close  # `}` sits at inner_close, `"` at inner_close+1
+                    else:
+                        pt_end = line.rfind("}")
+                    if pt_end > pt_start:
+                        try:
+                            data = json.loads(line[pt_start:pt_end + 1])
+                        except json.JSONDecodeError:
+                            pass
+                    break
+
+            # Fallback: try outer JSON → msg field
+            if data is None:
+                start_idx = line.find("{")
+                if start_idx != -1:
+                    try:
+                        end_idx = line.rfind("}")
+                        parsed = json.loads(line[start_idx:end_idx + 1])
+                        if isinstance(parsed, dict):
+                            if "msg" in parsed:
+                                msg_content = parsed["msg"]
+                                if isinstance(msg_content, str) and "{" in msg_content:
+                                    m_start = msg_content.find("{")
+                                    m_end = msg_content.rfind("}")
+                                    try:
+                                        data = json.loads(msg_content[m_start:m_end + 1])
+                                    except json.JSONDecodeError:
+                                        data = parsed
+                                else:
                                     data = parsed
                             else:
                                 data = parsed
-                        else:
-                            data = parsed
-                except json.JSONDecodeError:
-                    pass
+                    except json.JSONDecodeError:
+                        pass
 
             if not data or not isinstance(data, dict) or data.get("event") != "planner_timing":
                 skipped_lines += 1
