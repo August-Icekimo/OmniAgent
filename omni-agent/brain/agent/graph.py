@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
 import httpx
@@ -11,6 +12,57 @@ from llm import Message, Role, ModelRouter
 from .prompts import build_system_prompt, build_tools_prompt, build_assessment_prompt
 
 logger = logging.getLogger("brain.agent")
+
+# Process-global: marks only the first request handled by this worker process.
+# Each Uvicorn worker has its own flag; multi-worker deploys produce one cold-start per worker.
+_is_first_run = True
+
+
+class PlannerTimer:
+    """Helper to measure planner latency spans."""
+    def __init__(self, request_id: str):
+        self.request_id = request_id
+        self.start_time = time.perf_counter()
+        self.last_mark = self.start_time
+        self.spans = {
+            "plan_graph_entry_ms": 0.0,
+            "plan_routing_ms": 0.0,           # step 1+2: provider selection
+            "plan_complexity_prompt_ms": 0.0,  # step 3: build assessment prompt
+            "plan_complexity_llm_ms": 0.0,     # step 3: complexity assessment LLM call
+            "plan_complexity_parse_ms": 0.0,   # step 3: parse assessment response
+            "plan_upgrade_check_ms": 0.0,      # step 4: check_upgrade()
+            "plan_skills_prompt_ms": 0.0,      # step 5: build skills prompt
+            "plan_main_llm_ms": 0.0,           # step 5: main planning LLM call
+            "plan_skill_parse_ms": 0.0,        # step 5: parse plan/skill response
+        }
+        self.is_cold_start = False
+        self.executor_chosen = "unknown"
+        self.complexity = "unknown"
+        self.is_complete = False
+
+    def start_span(self):
+        self.last_mark = time.perf_counter()
+
+    def end_span(self, span_name: str):
+        now = time.perf_counter()
+        self.spans[span_name] += (now - self.last_mark) * 1000
+        self.last_mark = now
+
+    def emit(self):
+        total_ms = (time.perf_counter() - self.start_time) * 1000
+        log_data = {
+            "event": "planner_timing",
+            "request_id": self.request_id,
+            "is_cold_start": self.is_cold_start,
+            "executor_chosen": self.executor_chosen,
+            "complexity": self.complexity,
+            "total_ms": total_ms,
+            "is_complete": self.is_complete,
+            **self.spans
+        }
+        # Force JSON string as message to ensure structured logging even if config is simple
+        logger.info(json.dumps(log_data))
+
 
 class AgentState(TypedDict):
     """LangGraph 狀態結構。"""
@@ -37,139 +89,177 @@ class AgentState(TypedDict):
 
 async def planner_node(state: AgentState):
     """PLAN 節點：決定初始路由、評估複雜度並判斷是否需要技能。"""
+    global _is_first_run
     logger.info("Entering planner_node")
     
-    # --- Phase 4B: Attachment Routing ---
-    if state.get("attachment"):
-        logger.info("Attachment detected, routing to file_analyze")
-        return {
-            "plan": {
-                "skill": "file_analyze",
-                "is_write": False,
-                "summary": f"分析檔案：{state['attachment']['file_name']}"
-            },
-            "selected_provider": None, # 讓 router 決定最好的 (OAuth 優先)
-            "routing_reason": "attachment_routing"
-        }
+    request_id = state.get("source_message_id") or "unknown"
+    timer = PlannerTimer(request_id)
+    timer.is_cold_start = _is_first_run
+    _is_first_run = False
 
-    # 如果已經有 plan (例如從 pending confirmation 載入)，跳過重新規劃
-    if state.get("plan"):
-        return {}
-        
-    router = state["model_router"]
-    user_id = state["user_id"]
-    
-    # 1. 處理手動 Provider 覆蓋 (例如: /provider claude 你好)
-    messages = state["messages"]
-    last_msg_text = messages[-1].content if messages else ""
-    selected_provider = None
-    routing_reason = None
-    
-    if last_msg_text.startswith("/provider "):
-        parts = last_msg_text.split(" ", 2)
-        if len(parts) >= 2:
-            target_p = parts[1].lower()
-            if target_p in router._clients:
-                selected_provider = target_p
-                routing_reason = f"override:{target_p}"
-                # 剝離前綴
-                clean_text = parts[2] if len(parts) > 2 else ""
-                messages[-1].content = clean_text
-            else:
-                logger.warning(f"Unknown provider in override: {target_p}")
-
-    # 2. 自動判斷路由 (如果不受覆蓋)
-    thinking_budget = -1
-    if not selected_provider:
-        routing_decision = router.select_provider({
-            "text": last_msg_text,
-            "message_type": "text", # 預設，未來可從 state 獲取
-            "has_skill_intent": False # 初始假設
-        })
-        selected_provider = routing_decision["provider"]
-        routing_reason = routing_decision["reason"]
-        thinking_budget = routing_decision.get("thinking_budget", -1)
-
-    # 3. 複雜度評估 (由 Gemini Flash 統一執行)
-    complexity = "medium"
-    complexity_reason = "default"
-    
-    # 只有在非手動覆蓋的情況下進行評估
-    if "override" not in routing_reason:
-        try:
-            # 準備評估用的提示詞
-            assessment_system = build_system_prompt(state["system_prompt"])
-            
-            # 使用 Gemini Flash 進行評估 (假設 router 有註冊 gemini)
-            eval_response = await router.chat(
-                messages,
-                system_prompt=assessment_system,
-                provider=None, # 使用預設路由 (OAuth 優先)
-                temperature=0.0 # 評估需穩定
-            )
-            
-            # 解析評估結果
-            content = eval_response.content
-            if "```json" in content:
-                json_str = content.split("```json")[-1].split("```")[0].strip()
-                eval_data = json.loads(json_str)
-                complexity = eval_data.get("complexity", "medium")
-                complexity_reason = eval_data.get("reasoning", "eval")
-        except Exception as e:
-            logger.error(f"Complexity assessment failed: {e}")
-
-    # 4. 檢查升級規則
-    upgrade_requested = False
-    upgrade_info = {}
-    if "override" not in routing_reason:
-        upgrade_info = await router.check_upgrade(selected_provider, complexity, user_id)
-        if upgrade_info.get("upgrade"):
-            upgrade_requested = True
-            if not upgrade_info.get("require_confirmation", True):
-                # 靜默升級
-                selected_provider = upgrade_info["target_provider"]
-                routing_reason = upgrade_info["reason"]
-                upgrade_requested = False # 不需經過確認節點
-
-    # 5. 判斷是否需要技能 (使用目前選定的 provider 執行)
-    skills_context = build_tools_prompt(os.getenv("SKILLS_URL"))
-    full_system = state["system_prompt"] + "\n\n" + skills_context
-    
-    response = await router.chat(
-        messages,
-        system_prompt=full_system,
-        provider=selected_provider,
-        thinking_budget=thinking_budget,
-        caller="planner_node"
-    )
-    
-    content = response.content
-    plan = None
-    final_reply = None
-    
     try:
-        if "```json" in content:
-            plan_candidate = json.loads(json_str)
-            if isinstance(plan_candidate, dict) and "skill" in plan_candidate:
-                plan = plan_candidate
+        # --- Phase 4B: Attachment Routing ---
+        if state.get("attachment"):
+            timer.end_span("plan_graph_entry_ms")
+            logger.info("Attachment detected, routing to file_analyze")
+            timer.executor_chosen = "attachment_routing"
+            timer.is_complete = True
+            return {
+                "plan": {
+                    "skill": "file_analyze",
+                    "is_write": False,
+                    "summary": f"分析檔案：{state['attachment']['file_name']}"
+                },
+                "selected_provider": None, # 讓 router 決定最好的 (OAuth 優先)
+                "routing_reason": "attachment_routing"
+            }
+
+        # 如果已經有 plan (例如從 pending confirmation 載入)，跳過重新規劃
+        if state.get("plan"):
+            timer.end_span("plan_graph_entry_ms")
+            timer.is_complete = True
+            return {}
+
+        timer.end_span("plan_graph_entry_ms")
+        
+        router = state["model_router"]
+        user_id = state["user_id"]
+
+        # 1. 處理手動 Provider 覆蓋 (例如: /provider claude 你好)
+        timer.start_span()
+        messages = state["messages"]
+        last_msg_text = messages[-1].content if messages else ""
+        selected_provider = None
+        routing_reason = ""
+
+        if last_msg_text.startswith("/provider "):
+            parts = last_msg_text.split(" ", 2)
+            if len(parts) >= 2:
+                target_p = parts[1].lower()
+                if target_p in router._clients:
+                    selected_provider = target_p
+                    routing_reason = f"override:{target_p}"
+                    # 剝離前綴
+                    clean_text = parts[2] if len(parts) > 2 else ""
+                    messages[-1].content = clean_text
+                else:
+                    logger.warning(f"Unknown provider in override: {target_p}")
+
+        # 2. 自動判斷路由 (如果不受覆蓋)
+        thinking_budget = -1
+        if not selected_provider:
+            routing_decision = router.select_provider({
+                "text": last_msg_text,
+                "message_type": "text", # 預設，未來可從 state 獲取
+                "has_skill_intent": False # 初始假設
+            })
+            selected_provider = routing_decision["provider"]
+            routing_reason = routing_decision["reason"]
+            thinking_budget = routing_decision.get("thinking_budget", -1)
+        timer.end_span("plan_routing_ms")
+
+        # 3. 複雜度評估 (由 Gemini Flash 統一執行)
+        complexity = "medium"
+        complexity_reason = "default"
+
+        # 只有在非手動覆蓋的情況下進行評估
+        if "override" not in routing_reason:
+            try:
+                # 準備評估用的提示詞
+                timer.start_span()
+                assessment_system = build_system_prompt(state["system_prompt"])
+                timer.end_span("plan_complexity_prompt_ms")
+
+                # 使用 Gemini Flash 進行評估 (假設 router 有註冊 gemini)
+                timer.start_span()
+                eval_response = await router.chat(
+                    messages,
+                    system_prompt=assessment_system,
+                    provider=None, # 使用預設路由 (OAuth 優先)
+                    temperature=0.0 # 評估需穩定
+                )
+                timer.end_span("plan_complexity_llm_ms")
+
+                # 解析評估結果
+                timer.start_span()
+                content = eval_response.content
+                if "```json" in content:
+                    json_str = content.split("```json")[-1].split("```")[0].strip()
+                    eval_data = json.loads(json_str)
+                    complexity = eval_data.get("complexity", "medium")
+                    complexity_reason = eval_data.get("reasoning", "eval")
+                timer.end_span("plan_complexity_parse_ms")
+            except Exception as e:
+                logger.error(f"Complexity assessment failed: {e}")
+
+        timer.complexity = complexity
+
+        # 4. 檢查升級規則
+        upgrade_requested = False
+        upgrade_info = {}
+        if "override" not in routing_reason:
+            timer.start_span()
+            upgrade_info = await router.check_upgrade(selected_provider, complexity, user_id)
+            if upgrade_info.get("upgrade"):
+                upgrade_requested = True
+                if not upgrade_info.get("require_confirmation", True):
+                    # 靜默升級
+                    selected_provider = upgrade_info["target_provider"]
+                    routing_reason = upgrade_info["reason"]
+                    upgrade_requested = False # 不需經過確認節點
+            timer.end_span("plan_upgrade_check_ms")
+
+        timer.executor_chosen = selected_provider
+
+        # 5. 判斷是否需要技能 (使用目前選定的 provider 執行)
+        timer.start_span()
+        skills_context = build_tools_prompt(os.getenv("SKILLS_URL"))
+        full_system = state["system_prompt"] + "\n\n" + skills_context
+        timer.end_span("plan_skills_prompt_ms")
+
+        timer.start_span()
+        response = await router.chat(
+            messages,
+            system_prompt=full_system,
+            provider=selected_provider,
+            thinking_budget=thinking_budget,
+            caller="planner_node"
+        )
+        timer.end_span("plan_main_llm_ms")
+
+        timer.start_span()
+        content = response.content
+        plan = None
+        final_reply = None
+
+        try:
+            if "```json" in content:
+                json_str_skill = content.split("```json")[-1].split("```")[0].strip()
+                plan_candidate = json.loads(json_str_skill)
+                if isinstance(plan_candidate, dict) and "skill" in plan_candidate:
+                    plan = plan_candidate
+                else:
+                    final_reply = content
             else:
                 final_reply = content
-        else:
+        except Exception as e:
+            logger.warning(f"Failed to parse plan JSON: {e}")
             final_reply = content
-    except Exception as e:
-        logger.warning(f"Failed to parse plan JSON: {e}")
-        final_reply = content
+        timer.end_span("plan_skill_parse_ms")
 
-    return {
-        "selected_provider": selected_provider,
-        "routing_reason": routing_reason,
-        "complexity": complexity,
-        "complexity_reason": complexity_reason,
-        "upgrade_requested": upgrade_requested,
-        "plan": plan,
-        "final_reply": final_reply,
-        "messages": messages # 更新後的訊息 (如果剝離了前綴)
-    }
+        timer.is_complete = True
+        return {
+            "selected_provider": selected_provider,
+            "routing_reason": routing_reason,
+            "complexity": complexity,
+            "complexity_reason": complexity_reason,
+            "upgrade_requested": upgrade_requested,
+            "plan": plan,
+            "final_reply": final_reply,
+            "messages": messages # 更新後的訊息 (如果剝離了前綴)
+        }
+    finally:
+        timer.emit()
 
 async def upgrade_confirm_node(state: AgentState):
     """處理模型升級確認。"""
