@@ -29,13 +29,10 @@ def main():
     span_keys = [
         "plan_graph_entry_ms",
         "plan_routing_ms",
-        "plan_complexity_prompt_ms",
-        "plan_complexity_llm_ms",
-        "plan_complexity_parse_ms",
-        "plan_upgrade_check_ms",
         "plan_skills_prompt_ms",
         "plan_main_llm_ms",
         "plan_skill_parse_ms",
+        "plan_upgrade_llm_ms",
         "total_ms",
     ]
 

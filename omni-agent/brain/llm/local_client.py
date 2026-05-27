@@ -27,6 +27,7 @@ class LocalClient(ModelClient):
         self._client = AsyncOpenAI(
             base_url=self._base_url,
             api_key="not-needed",
+            timeout=120.0,
         )
 
     async def chat(

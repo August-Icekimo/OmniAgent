@@ -9,7 +9,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from llm import Message, Role, ModelRouter
-from .prompts import build_system_prompt, build_tools_prompt, build_assessment_prompt
+from .prompts import build_tools_prompt
 
 logger = logging.getLogger("brain.agent")
 
@@ -26,18 +26,14 @@ class PlannerTimer:
         self.last_mark = self.start_time
         self.spans = {
             "plan_graph_entry_ms": 0.0,
-            "plan_routing_ms": 0.0,           # step 1+2: provider selection
-            "plan_complexity_prompt_ms": 0.0,  # step 3: build assessment prompt
-            "plan_complexity_llm_ms": 0.0,     # step 3: complexity assessment LLM call
-            "plan_complexity_parse_ms": 0.0,   # step 3: parse assessment response
-            "plan_upgrade_check_ms": 0.0,      # step 4: check_upgrade()
-            "plan_skills_prompt_ms": 0.0,      # step 5: build skills prompt
-            "plan_main_llm_ms": 0.0,           # step 5: main planning LLM call
-            "plan_skill_parse_ms": 0.0,        # step 5: parse plan/skill response
+            "plan_routing_ms": 0.0,        # step 1+2: provider selection
+            "plan_skills_prompt_ms": 0.0,  # step 3: build skills+upgrade prompt
+            "plan_main_llm_ms": 0.0,       # step 3: main planning LLM call (local)
+            "plan_skill_parse_ms": 0.0,    # step 3: parse plan/skill response
+            "plan_upgrade_llm_ms": 0.0,    # step 3b: upgrade retry (gemini_oauth), 0 if not triggered
         }
         self.is_cold_start = False
         self.executor_chosen = "unknown"
-        self.complexity = "unknown"
         self.is_complete = False
 
     def start_span(self):
@@ -55,7 +51,6 @@ class PlannerTimer:
             "request_id": self.request_id,
             "is_cold_start": self.is_cold_start,
             "executor_chosen": self.executor_chosen,
-            "complexity": self.complexity,
             "total_ms": total_ms,
             "is_complete": self.is_complete,
             **self.spans
@@ -80,10 +75,25 @@ class AgentState(TypedDict):
     # --- Phase 4A 動態路由相關 ---
     selected_provider: Optional[str]
     routing_reason: Optional[str]
-    complexity: Optional[str]
-    complexity_reason: Optional[str]
     upgrade_requested: bool
     attachment: Optional[Dict[str, Any]]
+
+def _is_upgrade_signal(content: str) -> bool:
+    """Return True if local model output contains an upgrade_needed flag."""
+    try:
+        stripped = content.strip()
+        if stripped.startswith("{"):
+            data = json.loads(stripped)
+            return isinstance(data, dict) and data.get("upgrade_needed") is True
+        if "```json" in stripped:
+            json_str = stripped.split("```json")[-1].split("```")[0].strip()
+            data = json.loads(json_str)
+            return isinstance(data, dict) and data.get("upgrade_needed") is True
+    except Exception:
+        pass
+    # Fallback: catch any format variation (embedded in text, no code fence, etc.)
+    return '"upgrade_needed": true' in content or '"upgrade_needed":true' in content
+
 
 # --- Nodes ---
 
@@ -123,7 +133,6 @@ async def planner_node(state: AgentState):
         timer.end_span("plan_graph_entry_ms")
         
         router = state["model_router"]
-        user_id = state["user_id"]
 
         # 1. 處理手動 Provider 覆蓋 (例如: /provider claude 你好)
         timer.start_span()
@@ -158,63 +167,25 @@ async def planner_node(state: AgentState):
             thinking_budget = routing_decision.get("thinking_budget", -1)
         timer.end_span("plan_routing_ms")
 
-        # 3. 複雜度評估 (由 Gemini Flash 統一執行)
-        complexity = "medium"
-        complexity_reason = "default"
-
-        # 只有在非手動覆蓋的情況下進行評估
-        if "override" not in routing_reason:
-            try:
-                # 準備評估用的提示詞
-                timer.start_span()
-                assessment_system = build_system_prompt(state["system_prompt"])
-                timer.end_span("plan_complexity_prompt_ms")
-
-                # 使用 Gemini Flash 進行評估 (假設 router 有註冊 gemini)
-                timer.start_span()
-                eval_response = await router.chat(
-                    messages,
-                    system_prompt=assessment_system,
-                    provider=None, # 使用預設路由 (OAuth 優先)
-                    temperature=0.0 # 評估需穩定
-                )
-                timer.end_span("plan_complexity_llm_ms")
-
-                # 解析評估結果
-                timer.start_span()
-                content = eval_response.content
-                if "```json" in content:
-                    json_str = content.split("```json")[-1].split("```")[0].strip()
-                    eval_data = json.loads(json_str)
-                    complexity = eval_data.get("complexity", "medium")
-                    complexity_reason = eval_data.get("reasoning", "eval")
-                timer.end_span("plan_complexity_parse_ms")
-            except Exception as e:
-                logger.error(f"Complexity assessment failed: {e}")
-
-        timer.complexity = complexity
-
-        # 4. 檢查升級規則
-        upgrade_requested = False
-        upgrade_info = {}
-        if "override" not in routing_reason:
-            timer.start_span()
-            upgrade_info = await router.check_upgrade(selected_provider, complexity, user_id)
-            if upgrade_info.get("upgrade"):
-                upgrade_requested = True
-                if not upgrade_info.get("require_confirmation", True):
-                    # 靜默升級
-                    selected_provider = upgrade_info["target_provider"]
-                    routing_reason = upgrade_info["reason"]
-                    upgrade_requested = False # 不需經過確認節點
-            timer.end_span("plan_upgrade_check_ms")
-
         timer.executor_chosen = selected_provider
+        upgrade_requested = False
 
-        # 5. 判斷是否需要技能 (使用目前選定的 provider 執行)
+        # 3. 判斷是否需要技能，local model 可自我舉旗升級
         timer.start_span()
         skills_context = build_tools_prompt(os.getenv("SKILLS_URL"))
-        full_system = state["system_prompt"] + "\n\n" + skills_context
+        upgrade_instruction = (
+            "\n\n## 能力邊界（強制規則）\n"
+            "你沒有網路存取能力，無法獲得任何即時資訊。\n"
+            "遇到以下任何情況，你**必須**只輸出下方 JSON，不得嘗試回答、猜測或編造：\n"
+            "- 使用者詢問今日/最新/現在的新聞、頭條、時事\n"
+            "- 使用者詢問股市行情、股價、匯率、加密貨幣價格\n"
+            "- 使用者詢問即時天氣\n"
+            "- 任何需要你「上網查」才能回答的問題\n"
+            "- 你不確定答案且捏造內容會造成誤導的情況\n\n"
+            '{"upgrade_needed": true}\n\n'
+            "違反此規則（例如假裝自己在搜尋、編造新聞內容）是嚴重錯誤。"
+        )
+        full_system = state["system_prompt"] + "\n\n" + skills_context + upgrade_instruction
         timer.end_span("plan_skills_prompt_ms")
 
         timer.start_span()
@@ -232,31 +203,56 @@ async def planner_node(state: AgentState):
         plan = None
         final_reply = None
 
+        logger.info(f"[planner_debug] local response (first 300 chars): {content[:300]!r}")
+
+        # 偵測舉旗訊號，靜默升級至 gemini_oauth
+        if _is_upgrade_signal(content):
+            timer.end_span("plan_skill_parse_ms")
+            timer.start_span()
+            logger.info("Local model signaled upgrade, retrying with gemini_oauth")
+            # 升級時不傳 upgrade_instruction，避免 gemini_oauth 也回傳舉旗訊號
+            upgrade_system = state["system_prompt"] + "\n\n" + skills_context
+            response = await router.chat(
+                messages,
+                system_prompt=upgrade_system,
+                provider="gemini_oauth",
+                thinking_budget=-1,
+                caller="planner_node_upgrade"
+            )
+            timer.end_span("plan_upgrade_llm_ms")
+            content = response.content
+            logger.info(f"[planner_debug] upgrade response (first 300 chars): {content[:300]!r}")
+            selected_provider = "gemini_oauth"
+            routing_reason = "self_upgrade"
+            timer.executor_chosen = selected_provider
+            timer.start_span()  # 重啟 parse span 計算升級後回應的解析時間
+
         try:
             if "```json" in content:
                 json_str_skill = content.split("```json")[-1].split("```")[0].strip()
                 plan_candidate = json.loads(json_str_skill)
                 if isinstance(plan_candidate, dict) and "skill" in plan_candidate:
+                    logger.info(f"[planner_debug] parsed skill plan: {plan_candidate}")
                     plan = plan_candidate
                 else:
+                    logger.info(f"[planner_debug] json found but no skill key, treating as final_reply")
                     final_reply = content
             else:
                 final_reply = content
         except Exception as e:
-            logger.warning(f"Failed to parse plan JSON: {e}")
+            logger.warning(f"[planner_debug] plan JSON parse failed: {e}, treating as final_reply")
             final_reply = content
+        logger.info(f"[planner_debug] outcome — plan={plan is not None}, final_reply={final_reply is not None}, provider={selected_provider}, reason={routing_reason}")
         timer.end_span("plan_skill_parse_ms")
 
         timer.is_complete = True
         return {
             "selected_provider": selected_provider,
             "routing_reason": routing_reason,
-            "complexity": complexity,
-            "complexity_reason": complexity_reason,
             "upgrade_requested": upgrade_requested,
             "plan": plan,
             "final_reply": final_reply,
-            "messages": messages # 更新後的訊息 (如果剝離了前綴)
+            "messages": messages
         }
     finally:
         timer.emit()

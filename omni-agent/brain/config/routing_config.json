@@ -42,15 +42,13 @@
     {
       "name": "skill_execution",
       "condition": "has_skill_intent",
-      "provider": "gemini_oauth",
-      "thinking_budget": 0,
+      "provider": "local",
       "priority": 60
     },
     {
       "name": "default",
       "condition": "*",
-      "provider": "gemini_oauth",
-      "thinking_budget": -1,
+      "provider": "local",
       "priority": 0
     }
   ],
@@ -60,23 +58,7 @@
     "claude",
     "local"
   ],
-  "upgrade_rules": [
-    {
-      "trigger_provider": "gemini",
-      "trigger_complexity": "high",
-      "upgrade_to_provider": "gemini_oauth",
-      "upgrade_to_model": "gemini-2.5-pro",
-      "require_confirmation": true,
-      "auto_confirm_seconds": 15
-    },
-    {
-      "trigger_provider": "local",
-      "trigger_complexity": "high",
-      "upgrade_to_provider": "gemini_oauth",
-      "upgrade_to_model": "gemini-2.5-pro",
-      "require_confirmation": false
-    }
-  ],
+  "upgrade_rules": [],
   "upgrade_quota": {
     "daily_limit": 20,
     "cooldown_minutes": 10,
