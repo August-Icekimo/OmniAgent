@@ -192,3 +192,4 @@ if _is_upgrade_signal(content):
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-05-27 | Initial proposal — local-first planner, self-upgrade signal |
+| 2.0 | 2026-05-28 | Archived — implementation complete |
