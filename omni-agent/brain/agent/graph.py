@@ -13,7 +13,10 @@ from .prompts import build_system_prompt, build_tools_prompt, build_assessment_p
 
 logger = logging.getLogger("brain.agent")
 
+# Process-global: marks only the first request handled by this worker process.
+# Each Uvicorn worker has its own flag; multi-worker deploys produce one cold-start per worker.
 _is_first_run = True
+
 
 class PlannerTimer:
     """Helper to measure planner latency spans."""
@@ -23,10 +26,14 @@ class PlannerTimer:
         self.last_mark = self.start_time
         self.spans = {
             "plan_graph_entry_ms": 0.0,
-            "plan_config_load_ms": 0.0,
-            "plan_prompt_build_ms": 0.0,
-            "plan_llm_call_ms": 0.0,
-            "plan_decision_parse_ms": 0.0,
+            "plan_routing_ms": 0.0,           # step 1+2: provider selection
+            "plan_complexity_prompt_ms": 0.0,  # step 3: build assessment prompt
+            "plan_complexity_llm_ms": 0.0,     # step 3: complexity assessment LLM call
+            "plan_complexity_parse_ms": 0.0,   # step 3: parse assessment response
+            "plan_upgrade_check_ms": 0.0,      # step 4: check_upgrade()
+            "plan_skills_prompt_ms": 0.0,      # step 5: build skills prompt
+            "plan_main_llm_ms": 0.0,           # step 5: main planning LLM call
+            "plan_skill_parse_ms": 0.0,        # step 5: parse plan/skill response
         }
         self.is_cold_start = False
         self.executor_chosen = "unknown"
@@ -55,6 +62,7 @@ class PlannerTimer:
         }
         # Force JSON string as message to ensure structured logging even if config is simple
         logger.info(json.dumps(log_data))
+
 
 class AgentState(TypedDict):
     """LangGraph 狀態結構。"""
@@ -148,7 +156,7 @@ async def planner_node(state: AgentState):
             selected_provider = routing_decision["provider"]
             routing_reason = routing_decision["reason"]
             thinking_budget = routing_decision.get("thinking_budget", -1)
-        timer.end_span("plan_config_load_ms")
+        timer.end_span("plan_routing_ms")
 
         # 3. 複雜度評估 (由 Gemini Flash 統一執行)
         complexity = "medium"
@@ -160,7 +168,7 @@ async def planner_node(state: AgentState):
                 # 準備評估用的提示詞
                 timer.start_span()
                 assessment_system = build_system_prompt(state["system_prompt"])
-                timer.end_span("plan_prompt_build_ms")
+                timer.end_span("plan_complexity_prompt_ms")
 
                 # 使用 Gemini Flash 進行評估 (假設 router 有註冊 gemini)
                 timer.start_span()
@@ -170,7 +178,7 @@ async def planner_node(state: AgentState):
                     provider=None, # 使用預設路由 (OAuth 優先)
                     temperature=0.0 # 評估需穩定
                 )
-                timer.end_span("plan_llm_call_ms")
+                timer.end_span("plan_complexity_llm_ms")
 
                 # 解析評估結果
                 timer.start_span()
@@ -180,7 +188,7 @@ async def planner_node(state: AgentState):
                     eval_data = json.loads(json_str)
                     complexity = eval_data.get("complexity", "medium")
                     complexity_reason = eval_data.get("reasoning", "eval")
-                timer.end_span("plan_decision_parse_ms")
+                timer.end_span("plan_complexity_parse_ms")
             except Exception as e:
                 logger.error(f"Complexity assessment failed: {e}")
 
@@ -199,7 +207,7 @@ async def planner_node(state: AgentState):
                     selected_provider = upgrade_info["target_provider"]
                     routing_reason = upgrade_info["reason"]
                     upgrade_requested = False # 不需經過確認節點
-            timer.end_span("plan_config_load_ms")
+            timer.end_span("plan_upgrade_check_ms")
 
         timer.executor_chosen = selected_provider
 
@@ -207,7 +215,7 @@ async def planner_node(state: AgentState):
         timer.start_span()
         skills_context = build_tools_prompt(os.getenv("SKILLS_URL"))
         full_system = state["system_prompt"] + "\n\n" + skills_context
-        timer.end_span("plan_prompt_build_ms")
+        timer.end_span("plan_skills_prompt_ms")
 
         timer.start_span()
         response = await router.chat(
@@ -217,7 +225,7 @@ async def planner_node(state: AgentState):
             thinking_budget=thinking_budget,
             caller="planner_node"
         )
-        timer.end_span("plan_llm_call_ms")
+        timer.end_span("plan_main_llm_ms")
 
         timer.start_span()
         content = response.content
@@ -237,7 +245,7 @@ async def planner_node(state: AgentState):
         except Exception as e:
             logger.warning(f"Failed to parse plan JSON: {e}")
             final_reply = content
-        timer.end_span("plan_decision_parse_ms")
+        timer.end_span("plan_skill_parse_ms")
 
         timer.is_complete = True
         return {
@@ -250,8 +258,6 @@ async def planner_node(state: AgentState):
             "final_reply": final_reply,
             "messages": messages # 更新後的訊息 (如果剝離了前綴)
         }
-    except Exception:
-        raise
     finally:
         timer.emit()
 

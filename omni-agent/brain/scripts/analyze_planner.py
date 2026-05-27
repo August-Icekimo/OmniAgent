@@ -3,6 +3,7 @@ import sys
 import json
 import statistics
 import argparse
+import contextlib
 from typing import List, Dict, Any
 
 def calculate_percentiles(data: List[float]) -> Dict[str, float]:
@@ -10,14 +11,8 @@ def calculate_percentiles(data: List[float]) -> Dict[str, float]:
         return {"p50": 0.0, "p95": 0.0}
     if len(data) == 1:
         return {"p50": data[0], "p95": data[0]}
-
-    sorted_data = sorted(data)
-    p50 = statistics.median(sorted_data)
-
-    # Simple p95 implementation
-    idx = int(0.95 * len(sorted_data))
-    p95 = sorted_data[min(idx, len(sorted_data) - 1)]
-
+    p50 = statistics.median(data)
+    p95 = statistics.quantiles(data, n=20)[-1]  # interpolated 95th percentile
     return {"p50": p50, "p95": p95}
 
 def main():
@@ -26,8 +21,6 @@ def main():
     parser.add_argument("--min-samples", type=int, default=15, help="Minimum steady-state samples for reliable stats")
     args = parser.parse_args()
 
-    input_source = open(args.file, "r") if args.file else sys.stdin
-
     steady_state = []
     cold_starts = []
     skipped_lines = 0
@@ -35,17 +28,21 @@ def main():
 
     span_keys = [
         "plan_graph_entry_ms",
-        "plan_config_load_ms",
-        "plan_prompt_build_ms",
-        "plan_llm_call_ms",
-        "plan_decision_parse_ms",
-        "total_ms"
+        "plan_routing_ms",
+        "plan_complexity_prompt_ms",
+        "plan_complexity_llm_ms",
+        "plan_complexity_parse_ms",
+        "plan_upgrade_check_ms",
+        "plan_skills_prompt_ms",
+        "plan_main_llm_ms",
+        "plan_skill_parse_ms",
+        "total_ms",
     ]
 
-    # Structure to hold span values for steady state
     steady_spans = {key: [] for key in span_keys}
 
-    try:
+    input_cm = open(args.file) if args.file else contextlib.nullcontext(sys.stdin)
+    with input_cm as input_source:
         for line in input_source:
             total_lines += 1
             data = None
@@ -89,10 +86,6 @@ def main():
                 for key in span_keys:
                     if key in data:
                         steady_spans[key].append(data[key])
-
-    finally:
-        if input_source is not sys.stdin:
-            input_source.close()
 
     print(f"--- Planner Timing Analysis ---")
     print(f"Total lines processed: {total_lines}")
