@@ -36,7 +36,7 @@ class LocalClient(ModelClient):
         *,
         system_prompt: str | None = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: int = 512,
         thinking_budget: int | None = None,
         model: str | None = None,
     ) -> LLMResponse:
@@ -47,14 +47,16 @@ class LocalClient(ModelClient):
             oai_messages.append({"role": m.role.value, "content": m.content})
 
         effective_budget = thinking_budget if thinking_budget is not None else self._thinking_budget
-        extra = {"enable_thinking": True} if effective_budget > 0 else {}
+        # Always send enable_thinking explicitly — Gemma 4 defaults to thinking=on via chat template,
+        # which causes message.content to be empty (mlx-lm issue #1352).
+        extra = {"enable_thinking": effective_budget > 0}
 
         response = await self._client.chat.completions.create(
             model=model or self._model,
             messages=oai_messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            **({"extra_body": extra} if extra else {}),
+            extra_body=extra,
         )
 
         choice = response.choices[0]
