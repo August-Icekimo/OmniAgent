@@ -19,18 +19,13 @@
       "health_check": true,
       "thinking_budget": -1,
       "max_tokens": 1024
-    },
-    "gemini_oauth": {
-      "model": "gemini-2.5-pro",
-      "enabled": true,
-      "thinking_budget": 1000
     }
   },
   "routing_rules": [
     {
       "name": "image_input",
       "condition": "message_type == 'image'",
-      "provider": "gemini_oauth",
+      "provider": "gemini",
       "thinking_budget": 0,
       "priority": 100
     },
@@ -54,7 +49,6 @@
     }
   ],
   "fallback_chain": [
-    "gemini_oauth",
     "gemini",
     "claude",
     "local"

@@ -30,7 +30,7 @@ class PlannerTimer:
             "plan_skills_prompt_ms": 0.0,  # step 3: build skills+upgrade prompt
             "plan_main_llm_ms": 0.0,       # step 3: main planning LLM call (local)
             "plan_skill_parse_ms": 0.0,    # step 3: parse plan/skill response
-            "plan_upgrade_llm_ms": 0.0,    # step 3b: upgrade retry (gemini_oauth), 0 if not triggered
+            "plan_upgrade_llm_ms": 0.0,    # step 3b: upgrade retry (gemini), 0 if not triggered
         }
         self.is_cold_start = False
         self.executor_chosen = "unknown"
@@ -213,24 +213,24 @@ async def planner_node(state: AgentState):
             logger.warning("Local model returned empty content, treating as upgrade signal")
             content = '{"upgrade_needed": true}'
 
-        # 偵測舉旗訊號，靜默升級至 gemini_oauth
+        # 偵測舉旗訊號，靜默升級至 gemini
         if _is_upgrade_signal(content):
             timer.end_span("plan_skill_parse_ms")
             timer.start_span()
-            logger.info("Local model signaled upgrade, retrying with gemini_oauth")
-            # 升級時不傳 upgrade_instruction，避免 gemini_oauth 也回傳舉旗訊號
+            logger.info("Local model signaled upgrade, retrying with gemini")
+            # 升級時不傳 upgrade_instruction，避免 gemini 也回傳舉旗訊號
             upgrade_system = state["system_prompt"] + "\n\n" + skills_context
             response = await router.chat(
                 messages,
                 system_prompt=upgrade_system,
-                provider="gemini_oauth",
+                provider="gemini",
                 thinking_budget=-1,
                 caller="planner_node_upgrade"
             )
             timer.end_span("plan_upgrade_llm_ms")
             content = response.content
             logger.info(f"[planner_debug] upgrade response (first 300 chars): {content[:300]!r}")
-            selected_provider = "gemini_oauth"
+            selected_provider = "gemini"
             routing_reason = "self_upgrade"
             timer.executor_chosen = selected_provider
             timer.start_span()  # 重啟 parse span 計算升級後回應的解析時間

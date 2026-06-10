@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional
 from .base import ModelClient, Message, LLMResponse
 from .claude_client import ClaudeClient
 from .gemini_client import GeminiClient
-from .oauth_gemini_client import OAuthGeminiClient, OAuthRefreshError
 from .local_client import LocalClient
 from config.config_loader import load_routing_config
 
@@ -40,12 +39,9 @@ class ModelRouter:
 
     def select_provider(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """根據上下文決定初始 provider。"""
-        # 0. 多模態強制路由至 Gemini (Phase 4D)
+        # 0. 多模態強制路由至 Gemini API Key
         msg_type = context.get("message_type", "text")
         if msg_type in ["image", "voice", "sticker", "animation", "video"]:
-            # 優先使用 OAuth Gemini，若無則用 API Key 版
-            if "gemini_oauth" in self._clients:
-                return {"provider": "gemini_oauth", "reason": f"multimodal:{msg_type}"}
             return {"provider": "gemini", "reason": f"multimodal:{msg_type}"}
 
         # 1. 檢查規則匹配
@@ -247,7 +243,7 @@ class ModelRouter:
                 continue
 
             # Phase 4D: 如果是多模態且當前 Provider 不支援，則跳過 (除了 Gemini)
-            if msg_type == "multimodal" and target not in ["gemini", "gemini_oauth"]:
+            if msg_type == "multimodal" and target not in ["gemini"]:
                  logger.warning(f"Provider {target} does not support native multimodal in this chain. Skipping.")
                  continue
                 
@@ -288,15 +284,9 @@ class ModelRouter:
                     
                 return response
                 
-            except (OAuthRefreshError, Exception) as e:
-                # 專門處理 OAuth 失敗，強制進入 Fallback
-                if isinstance(e, OAuthRefreshError):
-                    logger.warning(f"OAuthGeminiClient refresh failed: {e}. Falling back to API Key.")
-                else:
-                    logger.error(f"Provider {target} failed: {e}")
-                
+            except Exception as e:
+                logger.error(f"Provider {target} failed: {e}")
                 last_error = e
-                # 繼續嘗試下一個候選 Provider
                 continue
         
         # 如果所有候選 Provider 都失敗了
@@ -315,10 +305,6 @@ def create_default_router() -> ModelRouter:
     if os.environ.get("ANTHROPIC_API_KEY"):
         router.register(ClaudeClient())
         logger.info("Claude provider enabled")
-
-    if os.environ.get("GEMINI_REFRESH_TOKEN"):
-        router.register(OAuthGeminiClient())
-        logger.info("Gemini OAuth provider enabled")
 
     if os.environ.get("GEMINI_API_KEY"):
         router.register(GeminiClient())
