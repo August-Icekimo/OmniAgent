@@ -174,7 +174,9 @@ async def planner_node(state: AgentState):
         timer.start_span()
         skills_context = build_tools_prompt(os.getenv("SKILLS_URL"))
         upgrade_instruction = (
-            "\n\n## 能力邊界（強制規則）\n"
+            "\n\n## 回覆長度（強制規則）\n"
+            "每次回覆**最多 3 句話**。不使用標題、列點或長篇分析。簡短、溫暖、直接。\n\n"
+            "## 能力邊界（強制規則）\n"
             "你沒有網路存取能力，無法獲得任何即時資訊。\n"
             "遇到以下任何情況，你**必須**只輸出下方 JSON，不得嘗試回答、猜測或編造：\n"
             "- 使用者詢問今日/最新/現在的新聞、頭條、時事\n"
@@ -203,7 +205,13 @@ async def planner_node(state: AgentState):
         plan = None
         final_reply = None
 
-        logger.info(f"[planner_debug] local response (first 300 chars): {content[:300]!r}")
+        output_tokens = response.usage.get("output_tokens", "?") if response.usage else "?"
+        logger.info(f"[planner_debug] local response tokens={output_tokens}, plan_main_llm_ms={timer.spans['plan_main_llm_ms']:.0f}, content (first 300 chars): {content[:300]!r}")
+
+        # 空回應視為升級訊號（local model 被 max_tokens 截斷前未輸出任何文字）
+        if not content.strip():
+            logger.warning("Local model returned empty content, treating as upgrade signal")
+            content = '{"upgrade_needed": true}'
 
         # 偵測舉旗訊號，靜默升級至 gemini_oauth
         if _is_upgrade_signal(content):
@@ -268,8 +276,11 @@ async def upgrade_confirm_node(state: AgentState):
 async def confirmer_node(state: AgentState):
     """CONFIRM 節點：處理需要用戶確認的操作。"""
     logger.info("Entering confirmer_node")
-    plan = state["plan"]
-    
+    plan = state.get("plan")
+
+    if not plan:
+        return {}
+
     # 如果不是寫操作，或者已經收到確認，直接跳過
     if not plan.get("is_write") or state["confirmation_received"]:
         return {}
