@@ -263,7 +263,8 @@ async def chat(msg: StandardMessage):
         client = router._clients.get(provider_name)
         model_name = client.model_name() if client else "unknown"
 
-        if pool:
+        if pool and "upgrade_needed" not in reply_text:
+            # 舉旗 JSON 絕不入庫——歷史汙染會讓後續模型學舌輸出原始 JSON
             round_messages = [
                 {"role": "user", "content": user_content},
                 {"role": "assistant", "content": reply_text}

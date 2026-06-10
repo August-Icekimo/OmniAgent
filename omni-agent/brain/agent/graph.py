@@ -206,6 +206,14 @@ async def planner_node(state: AgentState):
         )
         timer.end_span("plan_main_llm_ms")
 
+        # router 的 fallback 鏈可能換了實際回答者（如 local 超時改由 gemini 代打），
+        # 同步回 selected_provider，否則 footer 標籤與後續升級判斷都會錯
+        if response.provider and response.provider != selected_provider:
+            logger.info(f"Provider fallback detected: {selected_provider} -> {response.provider}")
+            selected_provider = response.provider
+            routing_reason = f"{routing_reason}+fallback:{response.provider}"
+            timer.executor_chosen = selected_provider
+
         timer.start_span()
         content = response.content
         plan = None
@@ -248,6 +256,11 @@ async def planner_node(state: AgentState):
                 # 升級鏈頂層仍被截斷：無路可升，至少留下可見訊號（考慮調高 max_tokens）
                 logger.warning("Upgrade provider output also hit max_tokens; reply is truncated")
             logger.info(f"[planner_debug] upgrade response (first 300 chars): {content[:300]!r}")
+            # 升級後仍是舉旗 JSON 或空回應（歷史汙染可能讓模型學舌）：
+            # 絕不把原始 JSON 出貨給使用者，改誠實回報
+            if not content.strip() or _is_upgrade_signal(content):
+                logger.error("Upgrade response is still an upgrade flag or empty; using honest fallback")
+                content = "嗯……這題我想得有點吃力，剛剛沒能順利完成。可以再問我一次嗎？"
             selected_provider = "gemini"
             routing_reason = "self_upgrade"
             timer.executor_chosen = selected_provider
