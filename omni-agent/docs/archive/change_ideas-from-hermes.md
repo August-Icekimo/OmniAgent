@@ -165,3 +165,5 @@ CREATE INDEX idx_lpr_line_id_state ON line_pending_replies (line_id, state);
 | 1.0 | 2026-06-10 | Initial proposal |
 | 1.1 | 2026-06-10 | 新增 Task 8：輸入中指示器取代 👀/👂 文字 ack（hermes 模式），ack 不再消耗 Push 額度 |
 | 1.2 | 2026-06-10 | 實機測試修正：LINE loading 202 視為成功；local 硬截確定性升級（finish_reason=length）；Telegram UTF-16 切段（4000 units，首段帶引用） |
+| 1.3 | 2026-06-10 | 後續實測修正：migration 008 postback 取件帶引用框；gemini max_tokens 8192；fallback 標籤同步；升級回應防舉旗學舌 + 歷史汙染清理 |
+| 1.4 | 2026-06-10 | Archived — implementation complete（PR #7 merged） |
