@@ -171,7 +171,7 @@ func LineWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 
 			// 慢回應監看：超過門檻仍未投遞時，燒掉 reply token 送 postback 按鈕
 			if event.ReplyToken != "" {
-				go monitorSlowLineReply(db, msgId, event.Source.UserId, event.ReplyToken, stdMsg.ReplyTokenExpiresAt)
+				go monitorSlowLineReply(db, msgId, event.Source.UserId, event.ReplyToken, stdMsg.ReplyTokenExpiresAt, stdMsg.QuoteToken)
 			}
 
 			// 4. Workspace Logging
@@ -206,7 +206,7 @@ func slowLineThreshold() time.Duration {
 // 仍有效，就建立 pending 列並燒掉 token 送「取得答案」按鈕。
 // 與 forwarder 的競態由 token 單次使用特性自然解決：若 forwarder 已用 token
 // 直接投遞，這裡的按鈕送出會被 LINE API 拒絕，pending 列隨即清掉。
-func monitorSlowLineReply(db *pgxpool.Pool, msgId, lineID, replyToken string, expiresAt int64) {
+func monitorSlowLineReply(db *pgxpool.Pool, msgId, lineID, replyToken string, expiresAt int64, quoteToken string) {
 	threshold := slowLineThreshold()
 	if threshold <= 0 {
 		return
@@ -231,8 +231,8 @@ func monitorSlowLineReply(db *pgxpool.Pool, msgId, lineID, replyToken string, ex
 
 	var rid string
 	err := db.QueryRow(ctx,
-		"INSERT INTO line_pending_replies (line_id) VALUES ($1) RETURNING rid",
-		lineID).Scan(&rid)
+		"INSERT INTO line_pending_replies (line_id, quote_token) VALUES ($1, NULLIF($2, '')) RETURNING rid",
+		lineID, quoteToken).Scan(&rid)
 	if err != nil {
 		log.Printf("LINE: pending reply insert failed: %v", err)
 		return
@@ -262,14 +262,19 @@ func handleLinePostback(db *pgxpool.Pool, lineID, replyToken, data string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// 原子認領：只有 ready 列會轉 delivered 並取得 payload
+	// 原子認領：只有 ready 列會轉 delivered 並取得 payload 與原訊息引用 token
 	var payload string
+	var quoteToken *string
 	err := db.QueryRow(ctx,
-		"UPDATE line_pending_replies SET state = 'delivered', updated_at = NOW() WHERE rid = $1 AND state = 'ready' RETURNING payload",
-		rid).Scan(&payload)
+		"UPDATE line_pending_replies SET state = 'delivered', updated_at = NOW() WHERE rid = $1 AND state = 'ready' RETURNING payload, quote_token",
+		rid).Scan(&payload, &quoteToken)
 	if err == nil {
+		qt := ""
+		if quoteToken != nil {
+			qt = *quoteToken
+		}
 		// SendLineReplyText 內建 reply→push fallback，標記 delivered 後不會丟失
-		if sendErr := messenger.SendLineReplyText(replyToken, lineID, payload); sendErr != nil {
+		if sendErr := messenger.SendLineReplyText(replyToken, lineID, payload, qt); sendErr != nil {
 			log.Printf("LINE: postback delivery failed for rid %s: %v", rid, sendErr)
 		}
 		return
@@ -290,7 +295,7 @@ func handleLinePostback(db *pgxpool.Pool, lineID, replyToken, data string) {
 			hint = "剛才處理的時候出了點狀況，麻煩再問我一次。"
 		}
 	}
-	if sendErr := messenger.SendLineReplyText(replyToken, lineID, hint); sendErr != nil {
+	if sendErr := messenger.SendLineReplyText(replyToken, lineID, hint, ""); sendErr != nil {
 		log.Printf("LINE: postback hint send failed for rid %s: %v", rid, sendErr)
 	}
 }

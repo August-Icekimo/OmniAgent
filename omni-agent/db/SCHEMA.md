@@ -104,6 +104,7 @@ LLM 超過門檻未回覆時，gateway 送出「取得答案」按鈕並在此�
 | `line_id` | text | | LINE 使用者 ID（U 開頭） |
 | `state` | text | `'pending'` | `pending` / `ready` / `delivered` / `error` |
 | `payload` | text | | `ready` 時的回覆全文（含 footer） |
+| `quote_token` | text | | 原訊息的 quoteToken，取件投遞時掛引用框（008 新增） |
 | `created_at` | timestamptz | `now()` | 建立時間 |
 | `updated_at` | timestamptz | `now()` | 狀態變更時間 |
 

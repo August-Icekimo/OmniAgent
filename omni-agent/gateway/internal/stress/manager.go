@@ -48,7 +48,7 @@ func evaluateStress(db *pgxpool.Pool) {
 	metrics := map[string]int{"queue_depth": depth}
 	metricsJSON, _ := json.Marshal(metrics)
 
-	_, err = db.Exec(ctx, 
+	_, err = db.Exec(ctx,
 		"INSERT INTO stress_logs (level, mood, action_taken, metrics) VALUES ($1, $2, $3, $4)",
 		level, mood, action, metricsJSON)
 

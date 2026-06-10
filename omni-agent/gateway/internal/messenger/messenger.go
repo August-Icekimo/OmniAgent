@@ -215,11 +215,12 @@ func SendLineReply(replyToken string, messages []lineMessage) error {
 }
 
 // SendLineReplyText 是 SendLineReply 的純文字便利包裝（postback 回覆用），
-// 同樣套用切段；超過首批 5 則的部分改 Push。
-func SendLineReplyText(replyToken, lineID, text string) error {
+// 同樣套用切段；超過首批 5 則的部分改 Push。quoteToken 非空時首段帶引用框。
+func SendLineReplyText(replyToken, lineID, text, quoteToken string) error {
 	return sendLineText(lineID, text, &SendOptions{
 		ReplyToken:          replyToken,
 		ReplyTokenExpiresAt: time.Now().Add(50 * time.Second).Unix(),
+		QuoteToken:          quoteToken,
 	})
 }
 
