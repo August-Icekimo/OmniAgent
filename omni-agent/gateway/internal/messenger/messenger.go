@@ -190,6 +190,36 @@ func SendLineReplyText(replyToken, lineID, text string) error {
 	})
 }
 
+// SendLineSlowReplyButton 以 reply token 送出「取得答案」postback 按鈕。
+// LLM 超過慢回應門檻時，與其讓 token 白白過期，不如燒掉它換一次免費投遞機會：
+// 使用者點按鈕時 postback event 會帶來全新的 reply token。
+func SendLineSlowReplyButton(replyToken, rid string) error {
+	msg := lineMessage{
+		Type:    "template",
+		AltText: "我還在思考中，準備好後點按鈕取得答案。",
+		Template: &lineTemplate{
+			Type: "buttons",
+			Text: "這題我需要多想一下。準備好後，點下方按鈕取得答案。",
+			Actions: []lineAction{
+				{Type: "postback", Label: "取得答案", Data: "rid=" + rid},
+			},
+		},
+	}
+	return SendLineReply(replyToken, []lineMessage{msg})
+}
+
+// ResolveLineID 將內部 UUID 解析為 LINE 平台 ID（U 開頭）；
+// 非 UUID（已是平台 ID）原樣回傳。
+func ResolveLineID(db *pgxpool.Pool, userID string) string {
+	if _, err := uuid.Parse(userID); err != nil {
+		return userID
+	}
+	if resolved, err := resolvePlatformID(db, "line", userID); err == nil {
+		return resolved
+	}
+	return userID
+}
+
 func sendLinePushMessages(lineID string, messages []lineMessage) error {
 	body := struct {
 		To       string        `json:"to"`

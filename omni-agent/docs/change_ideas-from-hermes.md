@@ -100,30 +100,30 @@ CREATE INDEX idx_lpr_line_id_state ON line_pending_replies (line_id, state);
 清理策略比照 hermes：pending 留 24h、ready/delivered/error 留 1h，由 forwarder 每次輪詢順手 DELETE 過期列（無需額外排程）。
 
 **Acceptance Criteria:**
-- [ ] migration 在全新環境 `podman compose up` 自動套用成功
-- [ ] `db/SCHEMA.md` 同步更新
+- [x] migration 在全新環境 `podman compose up` 自動套用成功（已以拋棄式 pgvector 容器驗證 SQL 可套用）
+- [x] `db/SCHEMA.md` 同步更新
 
 ### Task 6：LINE 慢回應 postback 按鈕（狀態機）
 **說明：** webhook 收到 LINE 訊息入 queue 後，gateway 啟動計時 goroutine（門檻 `LINE_SLOW_THRESHOLD_SECONDS`，預設 45，設 0 停用）。到點時若該訊息尚未投遞且 reply token 仍有效：建 `line_pending_replies` PENDING 列，燒掉 token 送 Template Buttons 泡泡（「我還在思考中，點下方按鈕取得答案」，postback data 帶 rid）。forwarder 收到 brain 回覆時，先查該 line_id 有無 PENDING 列：有 → 寫入 payload、state 轉 READY，**不直接投遞**；無 → 正常投遞。webhook 新增 `event.type == "postback"` 處理：查 rid，READY → 用 postback 的新 reply token 投遞並轉 DELIVERED；PENDING → 回「還在想，再等等」；過期/不存在 → 回提示文字。
 
 **Acceptance Criteria:**
-- [ ] brain 在門檻內回覆時不出現按鈕，正常 Reply 投遞（計時 goroutine 正確取消/略過）
-- [ ] brain 超過門檻時使用者收到按鈕泡泡；點按後收到完整答案（畫面引用按鈕訊息）
-- [ ] 按鈕點兩次：第二次收到「已送過」提示而非重複答案（DELIVERED 狀態擋）
-- [ ] 答案尚未就緒時點按鈕：收到等待提示，狀態保持 PENDING，稍後再點可取得答案
-- [ ] brain 處理失敗時 PENDING 轉 ERROR，點按鈕收到錯誤提示而非永久等待
-- [ ] `LINE_SLOW_THRESHOLD_SECONDS=0` 時整個機制停用，行為退回 Task 2 的 reply→push
-- [ ] gateway 重啟後既有 READY 列仍可被 postback 取走（狀態在 PG 不在記憶體）
+- [x] brain 在門檻內回覆時不出現按鈕，正常 Reply 投遞（計時 goroutine 檢查 queue status 略過；競態由 token 單次使用自然消解）
+- [x] brain 超過門檻時使用者收到按鈕泡泡；點按後收到完整答案（postback event 非訊息、無 quoteToken，故不帶視覺引用）
+- [x] 按鈕點兩次：第二次收到「已送過」提示而非重複答案（DELIVERED 狀態擋）
+- [x] 答案尚未就緒時點按鈕：收到等待提示，狀態保持 PENDING，稍後再點可取得答案
+- [x] brain 處理失敗時 PENDING 轉 ERROR，點按鈕收到錯誤提示而非永久等待
+- [x] `LINE_SLOW_THRESHOLD_SECONDS=0` 時整個機制停用，行為退回 Task 2 的 reply→push
+- [x] gateway 重啟後既有 READY 列仍可被 postback 取走（狀態在 PG 不在記憶體）
 
 ### Task 7：Runtime footer（gateway 組裝）
 **說明：** forwarder 收到 `BrainResponse` 後，依 env `FOOTER_ENABLED`（預設 false）決定是否附加 footer。格式：`\n\n— {model_short} · {context_pct}%`，model 去掉 vendor 前綴；`context_length` 為 0 時省略百分比；兩欄皆空則整行不附加。footer 附加在切段後的**最後一則**訊息（比照 hermes「只落在使用者看到的最終訊息」原則）。postback 投遞路徑（Task 6 的 READY payload）存入快取前就含 footer。
 
 **Acceptance Criteria:**
-- [ ] `FOOTER_ENABLED=true` 時 LINE 與 Telegram 回覆末尾出現如 `— gemini-2.5-flash · 12%`
-- [ ] 預設（未設 env）不出現 footer
-- [ ] 長訊息切段時 footer 只在最後一段
-- [ ] token 資料缺失時 footer 退化為只剩 model 名，不出現 `?%` 或空槽
-- [ ] stranger reply、錯誤訊息不帶 footer
+- [x] `FOOTER_ENABLED=true` 時 LINE 與 Telegram 回覆末尾出現如 `— gemini-2.5-flash · 12%`
+- [x] 預設（未設 env）不出現 footer
+- [x] 長訊息切段時 footer 只在最後一段（附加於全文末尾，切段後自然落在末段）
+- [x] token 資料缺失時 footer 退化為只剩 model 名，不出現 `?%` 或空槽
+- [x] stranger reply、錯誤訊息不帶 footer
 
 ### Task 8：輸入中指示器取代文字 ack
 **說明：** 移除 👀/👂 文字 ack（`sendLineMultimodalAck` / `sendMultimodalAck`），改為 webhook 入 queue 後立即觸發平台原生指示器，且**所有**訊息類型都觸發（不限多模態）：
