@@ -70,7 +70,7 @@ func processNextMessage(db *pgxpool.Pool, brainURL string) bool {
 		return false
 	}
 
-	log.Printf("Found message %s, sending to %s", msgId)
+	log.Printf("Found message %s, sending to %s", msgId, brainURL)
 
 	// Set to processing
 	_, err = tx.Exec(ctx, "UPDATE message_queue SET status = 'processing', locked_at = NOW() WHERE id = $1", msgId)
@@ -112,10 +112,18 @@ func processNextMessage(db *pgxpool.Pool, brainURL string) bool {
 
 	if brainResp.ReplyText != "" {
 		log.Printf("Delivering reply to %s user %s via messenger", origMsg.Platform, origMsg.UserID)
-		err = messenger.SendReply(db, origMsg.Platform, origMsg.UserID, brainResp.ReplyText)
+		opts := &messenger.SendOptions{
+			ReplyToken:          origMsg.ReplyToken,
+			ReplyTokenExpiresAt: origMsg.ReplyTokenExpiresAt,
+			QuoteToken:          origMsg.QuoteToken,
+		}
+		if origMsg.Platform == "telegram" {
+			opts.ReplyToMessageID = origMsg.SourceMessageID
+		}
+		err = messenger.SendReplyWithOptions(db, origMsg.Platform, origMsg.UserID, brainResp.ReplyText, opts)
 		if err != nil {
 			log.Printf("Failed to deliver reply for message %s: %v", msgId, err)
-			// We might want to keep it as processing or mark as failed, 
+			// We might want to keep it as processing or mark as failed,
 			// but for now let's just log it.
 		}
 	} else {

@@ -30,20 +30,28 @@ var (
 
 type lineWebhookBody struct {
 	Events []struct {
-		Type   string `json:"type"`
-		Source struct {
+		Type       string `json:"type"`
+		ReplyToken string `json:"replyToken"`
+		Source     struct {
 			UserId string `json:"userId"`
 		} `json:"source"`
 		Message struct {
-			Type      string `json:"type"`
-			Text      string `json:"text"`
-			Id        string `json:"id"`
-			PackageId string `json:"packageId"`
-			StickerId string `json:"stickerId"`
-			Duration  int    `json:"duration"`
+			Type       string `json:"type"`
+			Text       string `json:"text"`
+			Id         string `json:"id"`
+			PackageId  string `json:"packageId"`
+			StickerId  string `json:"stickerId"`
+			Duration   int    `json:"duration"`
+			QuoteToken string `json:"quoteToken"`
 		} `json:"message"`
+		Postback struct {
+			Data string `json:"data"`
+		} `json:"postback"`
 	} `json:"events"`
 }
+
+// lineReplyTokenTTL：官方約 60 秒，保守取 50 秒（同 hermes 策略）。
+const lineReplyTokenTTL = 50 * time.Second
 
 func LineWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 	secret := os.Getenv("LINE_CHANNEL_SECRET")
@@ -139,6 +147,11 @@ func LineWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 				MessageType:     messageType,
 				Text:            text,
 				Attachment:      attachment,
+				ReplyToken:      event.ReplyToken,
+				QuoteToken:      event.Message.QuoteToken,
+			}
+			if event.ReplyToken != "" {
+				stdMsg.ReplyTokenExpiresAt = time.Now().Add(lineReplyTokenTTL).Unix()
 			}
 
 			payloadJSON, marshalErr := json.Marshal(stdMsg)

@@ -52,27 +52,27 @@ hermes 對應實作參考：
 **說明：** `model.StandardMessage` 新增 `ReplyToken`、`ReplyTokenExpiresAt`（unix 秒）、`QuoteToken` 欄位（皆 `omitempty`，JSON payload 無需 migration）。`line.go` 解析 `event.replyToken` 與 `event.message.quoteToken`，計算 TTL 後寫入。
 
 **Acceptance Criteria:**
-- [ ] LINE 文字/圖片/語音/貼圖訊息進 queue 的 payload 含 `reply_token` 與 `reply_token_expires_at`
-- [ ] 文字訊息 payload 含 `quote_token`；無 quoteToken 的訊息（如貼圖）欄位省略不報錯
-- [ ] Telegram / BlueBubbles 路徑不受影響（欄位空值省略）
+- [x] LINE 文字/圖片/語音/貼圖訊息進 queue 的 payload 含 `reply_token` 與 `reply_token_expires_at`
+- [x] 文字訊息 payload 含 `quote_token`；無 quoteToken 的訊息（如貼圖）欄位省略不報錯
+- [x] Telegram / BlueBubbles 路徑不受影響（欄位空值省略）
 
 ### Task 2：messenger 重構 — SendOptions 與 LINE Reply 優先
 **說明：** `messenger.SendReply` 增加 options 參數（struct：`ReplyToken`、`ReplyTokenExpiresAt`、`QuoteToken`、`ReplyToMessageID`）。LINE 路徑：token 存在且未過期 → Reply API（訊息物件帶 `quoteToken`）；token 缺失/過期/被 API 拒絕（400/409）→ fallback Push。同時實作 4500 字切段與 5 則/call 上限：首批走 Reply，後續批次一律 Push（token 單次使用）。
 
 **Acceptance Criteria:**
-- [ ] token 有效時走 `/v2/bot/message/reply`，gateway log 可區分 reply/push 路徑
-- [ ] token 過期或 API 回 4xx 時自動改走 Push，使用者端無感
-- [ ] 回覆帶 `quoteToken` 時 LINE 畫面顯示引用框
-- [ ] 超過 4500 字的回覆正確切段，超過 5 則分批送出且不重複消耗 reply token
-- [ ] 既有呼叫點（stranger reply、錯誤訊息）不帶 options 時行為與現狀一致（純 Push）
+- [x] token 有效時走 `/v2/bot/message/reply`，gateway log 可區分 reply/push 路徑
+- [x] token 過期或 API 回 4xx 時自動改走 Push，使用者端無感
+- [x] 回覆帶 `quoteToken` 時 LINE 畫面顯示引用框
+- [x] 超過 4500 字的回覆正確切段，超過 5 則分批送出且不重複消耗 reply token（chunkText/TTL 含 unit test）
+- [x] 既有呼叫點（stranger reply、錯誤訊息）不帶 options 時行為與現狀一致（純 Push）
 
 ### Task 3：Telegram reply_to 標注
 **說明：** forwarder 投遞時把 `StandardMessage.SourceMessageID` 經 options 傳入，`sendTelegramMessage` 改帶 `reply_parameters: {message_id, allow_sending_without_reply: true}`。用 `allow_sending_without_reply` 取代 hermes 的「錯誤後重試拿掉 anchor」模式 — 原訊息被刪時 Telegram 自動退化為普通訊息，不需重試邏輯。
 
 **Acceptance Criteria:**
-- [ ] Telegram 回覆在畫面上標注引用原提問訊息
-- [ ] 原訊息被刪除後回覆仍送達（不帶引用），無錯誤 log
-- [ ] stranger reply 不帶 reply 標注（維持現狀）
+- [x] Telegram 回覆在畫面上標注引用原提問訊息
+- [x] 原訊息被刪除後回覆仍送達（不帶引用），無錯誤 log（`allow_sending_without_reply: true`）
+- [x] stranger reply 不帶 reply 標注（維持現狀）
 
 ### Task 4：Brain 回傳 token 統計
 **說明：** `BrainResponse` 新增 `context_tokens`（本輪 LLM call 的 input + output tokens，取自 `LLMResponse.usage`）與 `context_length`（該 model 的視窗上限）。`routing_config.json` 各 model 設定新增 `context_length` 欄位；缺值時 `context_length` 回 0（gateway 據此跳過百分比）。不在程式碼硬編 model 名稱與視窗大小。

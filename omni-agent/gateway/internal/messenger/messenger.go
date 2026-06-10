@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 
 	"io"
 
@@ -15,9 +17,36 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const (
+	lineReplyURL = "https://api.line.me/v2/bot/message/reply"
+	linePushURL  = "https://api.line.me/v2/bot/message/push"
+
+	// LINE 單則泡泡上限 5000 字，保守切 4500（同 hermes 策略）。
+	lineChunkSize = 4500
+	// LINE Reply/Push 單次 API call 最多 5 個訊息物件。
+	lineBatchSize = 5
+)
+
+// SendOptions 攜帶單次投遞的平台提示。零值（或 nil）行為等同舊版純 Push。
+type SendOptions struct {
+	ReplyToken          string // LINE：免費 Reply API 的單次 token
+	ReplyTokenExpiresAt int64  // unix 秒；0 視為不可用
+	QuoteToken          string // LINE：帶上可在回覆顯示引用框
+	ReplyToMessageID    string // Telegram：標注回覆的原訊息 id
+}
+
+func (o *SendOptions) replyTokenUsable() bool {
+	return o != nil && o.ReplyToken != "" && time.Now().Unix() < o.ReplyTokenExpiresAt
+}
+
 // SendReply delivers a text message back to the specified platform and user.
 // It handles resolving internal UUIDs to platform-specific IDs if necessary.
 func SendReply(db *pgxpool.Pool, platform, userID, text string) error {
+	return SendReplyWithOptions(db, platform, userID, text, nil)
+}
+
+// SendReplyWithOptions 同 SendReply，但可帶 reply token / 引用等投遞提示。
+func SendReplyWithOptions(db *pgxpool.Pool, platform, userID, text string, opts *SendOptions) error {
 	var targetID string = userID
 
 	// 1. Resolve Identity if userID is a UUID
@@ -34,9 +63,9 @@ func SendReply(db *pgxpool.Pool, platform, userID, text string) error {
 	// 2. Route to platform-specific messenger
 	switch platform {
 	case "line":
-		return sendLinePush(targetID, text)
+		return sendLineText(targetID, text, opts)
 	case "telegram":
-		return sendTelegramMessage(targetID, text)
+		return sendTelegramMessage(targetID, text, opts)
 	default:
 		return fmt.Errorf("unsupported platform: %s", platform)
 	}
@@ -62,36 +91,125 @@ func resolvePlatformID(db *pgxpool.Pool, platform, userUUID string) (string, err
 	return resolvedID, nil
 }
 
-func sendLinePush(lineID, text string) error {
+// ---------------------------------------------------------------------------
+// LINE
+// ---------------------------------------------------------------------------
+
+type lineMessage struct {
+	Type       string `json:"type"`
+	Text       string `json:"text,omitempty"`
+	QuoteToken string `json:"quoteToken,omitempty"`
+
+	// Template Buttons（慢回應 postback 用），與 Text 互斥
+	AltText  string        `json:"altText,omitempty"`
+	Template *lineTemplate `json:"template,omitempty"`
+}
+
+type lineTemplate struct {
+	Type    string       `json:"type"`
+	Text    string       `json:"text"`
+	Actions []lineAction `json:"actions"`
+}
+
+type lineAction struct {
+	Type  string `json:"type"`
+	Label string `json:"label"`
+	Data  string `json:"data"`
+}
+
+// chunkText 以 rune 為單位切段，避免在多位元組字元中間斷開。
+func chunkText(text string, size int) []string {
+	runes := []rune(text)
+	if len(runes) <= size {
+		return []string{text}
+	}
+	var chunks []string
+	for start := 0; start < len(runes); start += size {
+		end := start + size
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[start:end]))
+	}
+	return chunks
+}
+
+// sendLineText 切段並投遞：首批優先 Reply（免費），失敗或 token 不可用則 Push；
+// 後續批次一律 Push（reply token 單次使用）。
+func sendLineText(lineID, text string, opts *SendOptions) error {
+	var messages []lineMessage
+	for i, chunk := range chunkText(text, lineChunkSize) {
+		m := lineMessage{Type: "text", Text: chunk}
+		if i == 0 && opts != nil {
+			m.QuoteToken = opts.QuoteToken
+		}
+		messages = append(messages, m)
+	}
+
+	var firstErr error
+	for start := 0; start < len(messages); start += lineBatchSize {
+		end := start + lineBatchSize
+		if end > len(messages) {
+			end = len(messages)
+		}
+		batch := messages[start:end]
+
+		if start == 0 && opts.replyTokenUsable() {
+			if err := SendLineReply(opts.ReplyToken, batch); err == nil {
+				log.Printf("LINE: delivered batch via reply token")
+				continue
+			} else {
+				log.Printf("LINE: reply token rejected (%v); falling back to push", err)
+			}
+		}
+		if err := sendLinePushMessages(lineID, batch); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			log.Printf("LINE: push send failed: %v", err)
+		}
+	}
+	return firstErr
+}
+
+// SendLineReply 以 reply token 投遞訊息（單次使用、免費）。
+func SendLineReply(replyToken string, messages []lineMessage) error {
+	body := struct {
+		ReplyToken string        `json:"replyToken"`
+		Messages   []lineMessage `json:"messages"`
+	}{ReplyToken: replyToken, Messages: messages}
+	return postLineAPI(lineReplyURL, body)
+}
+
+// SendLineReplyText 是 SendLineReply 的純文字便利包裝（postback 回覆用），
+// 同樣套用切段；超過首批 5 則的部分改 Push。
+func SendLineReplyText(replyToken, lineID, text string) error {
+	return sendLineText(lineID, text, &SendOptions{
+		ReplyToken:          replyToken,
+		ReplyTokenExpiresAt: time.Now().Add(50 * time.Second).Unix(),
+	})
+}
+
+func sendLinePushMessages(lineID string, messages []lineMessage) error {
+	body := struct {
+		To       string        `json:"to"`
+		Messages []lineMessage `json:"messages"`
+	}{To: lineID, Messages: messages}
+	return postLineAPI(linePushURL, body)
+}
+
+func postLineAPI(url string, payload any) error {
 	token := os.Getenv("LINE_CHANNEL_ACCESS_TOKEN")
 	if token == "" {
 		return fmt.Errorf("LINE_CHANNEL_ACCESS_TOKEN not set")
 	}
 
-	url := "https://api.line.me/v2/bot/message/push"
-	
-	type lineMessage struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	type linePushBody struct {
-		To       string        `json:"to"`
-		Messages []lineMessage `json:"messages"`
-	}
-
-	body := linePushBody{
-		To: lineID,
-		Messages: []lineMessage{
-			{Type: "text", Text: text},
-		},
-	}
-
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -106,17 +224,30 @@ func sendLinePush(lineID, text string) error {
 	return nil
 }
 
-func sendTelegramMessage(chatID, text string) error {
+// ---------------------------------------------------------------------------
+// Telegram
+// ---------------------------------------------------------------------------
+
+func sendTelegramMessage(chatID, text string, opts *SendOptions) error {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
 		return fmt.Errorf("TELEGRAM_BOT_TOKEN not set")
 	}
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
-	
-	payload := map[string]string{
+
+	payload := map[string]any{
 		"chat_id": chatID,
 		"text":    text,
+	}
+	// allow_sending_without_reply：原訊息被刪時自動退化為普通訊息，免重試。
+	if opts != nil && opts.ReplyToMessageID != "" {
+		if msgID, err := strconv.Atoi(opts.ReplyToMessageID); err == nil {
+			payload["reply_parameters"] = map[string]any{
+				"message_id":                  msgID,
+				"allow_sending_without_reply": true,
+			}
+		}
 	}
 
 	jsonBody, _ := json.Marshal(payload)
@@ -133,4 +264,3 @@ func sendTelegramMessage(chatID, text string) error {
 
 	return nil
 }
-
