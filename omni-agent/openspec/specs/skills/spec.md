@@ -41,3 +41,37 @@ The system must be able to extract and summarize information from various file t
 #### Scenario: Spreadsheet Analysis
 - **WHEN** the `file_analyze` skill receives an Excel file
 - **THEN** it must read the sheets (up to a limit) and provide a structured summary of the data.
+
+### Requirement: Web Search (Real-time Information)
+The system must be able to retrieve real-time information from the web for time-sensitive queries.
+
+#### Scenario: Query Web Search
+- **WHEN** the `web_search` skill is called with a query
+- **THEN** it must query a self-hosted SearXNG instance (intranet-only) via its JSON API
+- **AND** return a truncated, ranked list of `{title, url, description, position}` results
+- **AND** never raise — failures return a serializable `{"success": false, "error": ...}`.
+
+### Requirement: Terminal Command Execution (Sandboxed)
+The system must be able to execute shell commands to inspect HomeLab state, with strict isolation and authorization controls.
+
+#### Scenario: Execute Command in Sandbox
+- **WHEN** the `terminal` skill is called with a `command`
+- **THEN** the command must execute inside a dedicated, restricted sandbox container (read-only filesystem, non-root, no secrets, intranet-only, resource-limited)
+- **AND** the sandbox must enforce a timeout (killing the process group) and truncate output.
+
+#### Scenario: Administrator-only Authorization
+- **WHEN** a non-administrator (`users.role != 'admin'`) requests the `terminal` skill
+- **THEN** the request must be refused without executing any command.
+
+#### Scenario: Allowlist Bypasses Confirmation
+- **WHEN** an administrator requests a command whose first token is in the safe read-only allowlist (and contains no shell chaining)
+- **THEN** it must execute without a confirmation step (`is_write` forced to false).
+
+#### Scenario: Non-allowlisted Command Requires Confirmation
+- **WHEN** an administrator requests a command that is not on the allowlist
+- **THEN** the system must store the pending plan and ask for confirmation before executing
+- **AND** execute it only after the user confirms in a subsequent message.
+
+#### Scenario: Dangerous Command Blocked
+- **WHEN** a command matches a dangerous pattern (e.g. `rm -rf`, `sudo`, fork bomb, `curl ... | sh`)
+- **THEN** it must be blocked at both the Brain skill and the sandbox layers, and never executed.
