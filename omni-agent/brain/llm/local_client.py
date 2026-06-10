@@ -73,6 +73,7 @@ class LocalClient(ModelClient):
             provider="local",
             usage=usage,
             cached=False,  # 本地模型無 cache 機制
+            finish_reason=choice.finish_reason or "",
         )
 
     def provider_name(self) -> str:

@@ -71,12 +71,16 @@ class AgentState(TypedDict):
     skill_result: Optional[Dict[str, Any]]
     final_reply: Optional[str]
     model_router: ModelRouter
-    
+
     # --- Phase 4A 動態路由相關 ---
     selected_provider: Optional[str]
     routing_reason: Optional[str]
     upgrade_requested: bool
     attachment: Optional[Dict[str, Any]]
+
+    # 產生 final_reply 的那次 LLM call 的 usage（input/output tokens），
+    # 供 main.py 回填 BrainResponse 的 context_tokens（gateway footer 用）。
+    last_usage: Optional[Dict[str, Any]]
 
 def _is_upgrade_signal(content: str) -> bool:
     """Return True if local model output contains an upgrade_needed flag."""
@@ -183,7 +187,9 @@ async def planner_node(state: AgentState):
             "- 使用者詢問股市行情、股價、匯率、加密貨幣價格\n"
             "- 使用者詢問即時天氣\n"
             "- 任何需要你「上網查」才能回答的問題\n"
-            "- 你不確定答案且捏造內容會造成誤導的情況\n\n"
+            "- 你不確定答案且捏造內容會造成誤導的情況\n"
+            "- 使用者要求長篇輸出（寫文章、報告、故事，或指定數百字以上的篇幅）——"
+            "你的輸出長度上限很小，硬寫會被截斷\n\n"
             '{"upgrade_needed": true}\n\n'
             "違反此規則（例如假裝自己在搜尋、編造新聞內容）是嚴重錯誤。"
         )
@@ -200,6 +206,14 @@ async def planner_node(state: AgentState):
         )
         timer.end_span("plan_main_llm_ms")
 
+        # router 的 fallback 鏈可能換了實際回答者（如 local 超時改由 gemini 代打），
+        # 同步回 selected_provider，否則 footer 標籤與後續升級判斷都會錯
+        if response.provider and response.provider != selected_provider:
+            logger.info(f"Provider fallback detected: {selected_provider} -> {response.provider}")
+            selected_provider = response.provider
+            routing_reason = f"{routing_reason}+fallback:{response.provider}"
+            timer.executor_chosen = selected_provider
+
         timer.start_span()
         content = response.content
         plan = None
@@ -213,8 +227,17 @@ async def planner_node(state: AgentState):
             logger.warning("Local model returned empty content, treating as upgrade signal")
             content = '{"upgrade_needed": true}'
 
+        # 確定性保底：輸出被 max_tokens 硬截（finish_reason=length）直接升級重試，
+        # 不依賴模型自覺舉旗——對話歷史的續寫慣性常壓過 prompt 指令
+        truncated = (
+            selected_provider == "local"
+            and getattr(response, "finish_reason", "") == "length"
+        )
+        if truncated:
+            logger.info("Local output hit max_tokens (finish_reason=length), treating as upgrade signal")
+
         # 偵測舉旗訊號，靜默升級至 gemini
-        if _is_upgrade_signal(content):
+        if truncated or _is_upgrade_signal(content):
             timer.end_span("plan_skill_parse_ms")
             timer.start_span()
             logger.info("Local model signaled upgrade, retrying with gemini")
@@ -229,7 +252,15 @@ async def planner_node(state: AgentState):
             )
             timer.end_span("plan_upgrade_llm_ms")
             content = response.content
+            if getattr(response, "finish_reason", "") == "length":
+                # 升級鏈頂層仍被截斷：無路可升，至少留下可見訊號（考慮調高 max_tokens）
+                logger.warning("Upgrade provider output also hit max_tokens; reply is truncated")
             logger.info(f"[planner_debug] upgrade response (first 300 chars): {content[:300]!r}")
+            # 升級後仍是舉旗 JSON 或空回應（歷史汙染可能讓模型學舌）：
+            # 絕不把原始 JSON 出貨給使用者，改誠實回報
+            if not content.strip() or _is_upgrade_signal(content):
+                logger.error("Upgrade response is still an upgrade flag or empty; using honest fallback")
+                content = "嗯……這題我想得有點吃力，剛剛沒能順利完成。可以再問我一次嗎？"
             selected_provider = "gemini"
             routing_reason = "self_upgrade"
             timer.executor_chosen = selected_provider
@@ -260,7 +291,8 @@ async def planner_node(state: AgentState):
             "upgrade_requested": upgrade_requested,
             "plan": plan,
             "final_reply": final_reply,
-            "messages": messages
+            "messages": messages,
+            "last_usage": response.usage
         }
     finally:
         timer.emit()
@@ -364,8 +396,8 @@ async def reporter_node(state: AgentState):
         if not reply or len(reply.strip()) == 0:
             logger.warning("Cindy soul response was empty, using analysis result as fallback.")
             reply = f"嗯……我看到了這個貼圖：{analysis}"
-            
-        return {"final_reply": reply}
+
+        return {"final_reply": reply, "last_usage": response.usage}
 
     report_prompt = f"""
     ## Skill Result
@@ -381,7 +413,7 @@ async def reporter_node(state: AgentState):
         provider=state.get("selected_provider"),
         caller="reporter_node"
     )
-    return {"final_reply": response.content}
+    return {"final_reply": response.content, "last_usage": response.usage}
 
 # --- Router ---
 

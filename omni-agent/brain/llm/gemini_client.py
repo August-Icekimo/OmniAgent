@@ -121,12 +121,20 @@ class GeminiClient(ModelClient):
             if hasattr(response.usage_metadata, "cached_content_token_count"):
                 usage["cache_read_tokens"] = response.usage_metadata.cached_content_token_count
 
+        # MAX_TOKENS 統一映射為 "length"（與 OpenAI 慣例一致），供上層偵測截斷
+        finish_reason = ""
+        if response.candidates:
+            raw_reason = getattr(response.candidates[0], "finish_reason", None)
+            if raw_reason is not None and "MAX_TOKENS" in str(raw_reason):
+                finish_reason = "length"
+
         return LLMResponse(
             content=response.text,
             model=target_model,
             provider="gemini",
             usage=usage,
             cached=cached_content is not None,
+            finish_reason=finish_reason,
         )
 
     def provider_name(self) -> str:

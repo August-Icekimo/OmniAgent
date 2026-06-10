@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"time"
 
 	"omni-agent/gateway/internal/messenger"
@@ -20,11 +19,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-)
-
-var (
-	tgAckMap  = make(map[string]time.Time)
-	tgAckLock sync.Mutex
 )
 
 type telegramUpdate struct {
@@ -136,6 +130,10 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 			return
 		}
 
+		// 即時回饋：單次輸入中指示（約 5 秒），覆蓋附件下載空窗；
+		// 入 queue 後由 StartTelegramTyping 的刷新迴圈接手。
+		go messenger.SendTelegramTypingOnce(chatIDStr)
+
 		// 2. Message Parsing
 		messageType := ""
 		text := ""
@@ -147,7 +145,6 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 		} else if payload.Message.Voice != nil {
 			messageType = "voice"
 			text = payload.Message.Caption
-			sendMultimodalAck(db, "telegram", chatIDStr, "voice")
 			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Voice.FileID, "voice.ogg", "audio/ogg", payload.Message.Voice.FileSize)
 			if err != nil {
 				handleDownloadError(db, chatIDStr, err)
@@ -159,7 +156,6 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 		} else if len(payload.Message.Photo) > 0 {
 			messageType = "image"
 			text = payload.Message.Caption
-			sendMultimodalAck(db, "telegram", chatIDStr, "image")
 			// Pick the largest photo
 			photo := payload.Message.Photo[len(payload.Message.Photo)-1]
 			fileName := fmt.Sprintf("photo_%s.jpg", photo.FileUniqueID)
@@ -172,7 +168,6 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 			attachment.MediaType = "image"
 		} else if payload.Message.Sticker != nil {
 			messageType = "sticker"
-			sendMultimodalAck(db, "telegram", chatIDStr, "image")
 			fileName := "sticker.webp"
 			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Sticker.FileID, fileName, "image/webp", payload.Message.Sticker.FileSize)
 			if err != nil {
@@ -194,7 +189,6 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 		} else if payload.Message.Animation != nil {
 			messageType = "animation"
 			text = payload.Message.Caption
-			sendMultimodalAck(db, "telegram", chatIDStr, "image")
 			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Animation.FileID, "animation.mp4", "video/mp4", payload.Message.Animation.FileSize)
 			if err != nil {
 				handleDownloadError(db, chatIDStr, err)
@@ -211,7 +205,6 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 		} else if payload.Message.Video != nil {
 			messageType = "video"
 			text = payload.Message.Caption
-			sendMultimodalAck(db, "telegram", chatIDStr, "image")
 			attachment, err = downloadTelegramFile(c.Request.Context(), userID.String(), payload.Message.Video.FileID, "video.mp4", "video/mp4", payload.Message.Video.FileSize)
 			if err != nil {
 				handleDownloadError(db, chatIDStr, err)
@@ -274,6 +267,9 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 			return
 		}
 
+		// 輸入中刷新迴圈：至 forwarder 投遞完成（StopTyping）或 90 秒上限
+		messenger.StartTelegramTyping(msgId, chatIDStr)
+
 		// 4. Workspace Logging
 		if attachment != nil {
 			_, err = db.Exec(c.Request.Context(),
@@ -285,35 +281,6 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	}
-}
-
-func sendMultimodalAck(db *pgxpool.Pool, platform, chatID, modality string) {
-	tgAckLock.Lock()
-	defer tgAckLock.Unlock()
-
-	now := time.Now()
-	if lastAck, ok := tgAckMap[chatID]; ok && now.Sub(lastAck) < 5*time.Second {
-		return
-	}
-
-	var ackText string
-	switch modality {
-	case "voice":
-		ackText = "👂..."
-	default:
-		ackText = "👀..."
-	}
-
-	messenger.SendReply(db, platform, chatID, ackText)
-	tgAckMap[chatID] = now
-
-	// Evict entries older than 30s to bound map growth.
-	cutoff := now.Add(-30 * time.Second)
-	for k, v := range tgAckMap {
-		if v.Before(cutoff) {
-			delete(tgAckMap, k)
-		}
 	}
 }
 

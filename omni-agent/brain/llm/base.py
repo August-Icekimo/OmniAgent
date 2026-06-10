@@ -26,6 +26,8 @@ class LLMResponse:
     usage: dict = field(default_factory=dict)
     # usage 範例: {"input_tokens": 100, "output_tokens": 50, "cache_read_tokens": 80}
     cached: bool = False
+    # "length" 表示輸出被 max_tokens 硬截（planner 據此升級重試），其餘留空
+    finish_reason: str = ""
 
 
 class ModelClient(ABC):

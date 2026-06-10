@@ -70,6 +70,10 @@ class BrainResponse(BaseModel):
     provider: str
     cached: bool = False
     routing_reason: str | None = None
+    # gateway runtime footer 用：本輪 LLM call 的 token 數與該 model 視窗上限。
+    # 0 表示資料缺失，gateway 據此省略對應欄位。
+    context_tokens: int = 0
+    context_length: int = 0
 
 
 # --- App Lifespan ---
@@ -259,7 +263,8 @@ async def chat(msg: StandardMessage):
         client = router._clients.get(provider_name)
         model_name = client.model_name() if client else "unknown"
 
-        if pool:
+        if pool and "upgrade_needed" not in reply_text:
+            # 舉旗 JSON 絕不入庫——歷史汙染會讓後續模型學舌輸出原始 JSON
             round_messages = [
                 {"role": "user", "content": user_content},
                 {"role": "assistant", "content": reply_text}
@@ -287,11 +292,16 @@ async def chat(msg: StandardMessage):
             # 啟動 15s 自動確認任務
             asyncio.create_task(auto_confirm_model_upgrade(app, msg, final_state))
 
+        usage = final_state.get("last_usage") or {}
+        context_tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
+
         return BrainResponse(
             reply_text=reply_text,
             model_used=model_name,
             provider=provider_name,
-            routing_reason=final_state.get("routing_reason")
+            routing_reason=final_state.get("routing_reason"),
+            context_tokens=context_tokens,
+            context_length=router.context_length(provider_name)
         )
 
     except Exception as e:

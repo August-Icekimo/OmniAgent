@@ -95,6 +95,21 @@ erDiagram
 | `notified_at` | timestamptz | | 管理員收到通知的時間 |
 | `created_at` | timestamptz | `now()` | 發生時間 |
 
+### `line_pending_replies` — LINE 慢回應 postback 快取
+LLM 超過門檻未回覆時，gateway 送出「取得答案」按鈕並在此建立 `pending` 列；brain 回覆先快取（`ready`），待使用者點按 postback 以新 reply token 免費投遞（`delivered`）。失敗為 `error`。清理：`pending` 留 24h、其餘留 1h，由 forwarder 心跳順手刪除。
+
+| 欄位 | 類型 | 預設值 | 說明 |
+| :--- | :--- | :--- | :--- |
+| `rid` | uuid | `gen_random_uuid()` | 主鍵，postback data 攜帶的取件碼 |
+| `line_id` | text | | LINE 使用者 ID（U 開頭） |
+| `state` | text | `'pending'` | `pending` / `ready` / `delivered` / `error` |
+| `payload` | text | | `ready` 時的回覆全文（含 footer） |
+| `quote_token` | text | | 原訊息的 quoteToken，取件投遞時掛引用框（008 新增） |
+| `created_at` | timestamptz | `now()` | 建立時間 |
+| `updated_at` | timestamptz | `now()` | 狀態變更時間 |
+
+索引：`idx_lpr_line_id_state (line_id, state)`。
+
 ---
 
 ## 4. 記憶與環境 (Memory & Context)
