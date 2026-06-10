@@ -65,5 +65,16 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: omni-agent-searxng-1
+    # 僅 compose 內網可達，不發布 host port（limiter 因此可關閉）
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-omni-agent-searxng-secret}
+      TZ: Asia/Taipei
+    restart: unless-stopped
+
 volumes:
   omni-workspace:

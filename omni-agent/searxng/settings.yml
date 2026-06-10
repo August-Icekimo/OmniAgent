@@ -1,0 +1,13 @@
+# SearXNG 設定 — OmniAgent web_search 技能後端。
+# 僅在 compose 內網供 brain 呼叫，未對外發布 port，故關閉 limiter。
+# secret_key 由 compose 的 SEARXNG_SECRET 環境變數注入。
+use_default_settings: true
+
+server:
+  limiter: false
+
+search:
+  # brain 的 web_search provider 走 /search?format=json，預設不開 json 必須在此啟用
+  formats:
+    - html
+    - json
