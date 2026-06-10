@@ -202,6 +202,14 @@ class ModelRouter:
         except Exception as e:
             logger.error(f"Failed to consume quota: {e}")
 
+    def context_length(self, provider: str) -> int:
+        """回傳 provider 設定的 context window 上限（tokens），未設定回 0。"""
+        raw = self._config.get("providers", {}).get(provider, {}).get("context_length")
+        try:
+            return int(raw) if raw else 0
+        except (TypeError, ValueError):
+            return 0
+
     async def chat(
         self,
         messages: List[Message],

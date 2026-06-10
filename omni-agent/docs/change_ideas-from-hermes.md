@@ -78,9 +78,9 @@ hermes 對應實作參考：
 **說明：** `BrainResponse` 新增 `context_tokens`（本輪 LLM call 的 input + output tokens，取自 `LLMResponse.usage`）與 `context_length`（該 model 的視窗上限）。`routing_config.json` 各 model 設定新增 `context_length` 欄位；缺值時 `context_length` 回 0（gateway 據此跳過百分比）。不在程式碼硬編 model 名稱與視窗大小。
 
 **Acceptance Criteria:**
-- [ ] `/chat` 回應 JSON 含 `context_tokens`、`context_length`
-- [ ] 三個 provider（gemini / claude / local）路徑都正確回填 usage；usage 缺失時 `context_tokens` 為 0
-- [ ] `context_length` 來自 routing_config，未設定的 model 回 0 而非 crash
+- [x] `/chat` 回應 JSON 含 `context_tokens`、`context_length`
+- [x] 三個 provider（gemini / claude / local）路徑都正確回填 usage；usage 缺失時 `context_tokens` 為 0
+- [x] `context_length` 來自 routing_config，未設定的 model 回 0 而非 crash
 
 ### Task 5：DB migration — line_pending_replies
 **說明：** 新增 migration 建表，作為 postback 狀態機的儲存層：

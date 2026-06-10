@@ -5,12 +5,14 @@
       "enabled": true,
       "skip_in_test": false,
       "thinking_budget": -1,
-      "upgrade_model": "gemini-2.5-pro"
+      "upgrade_model": "gemini-2.5-pro",
+      "context_length": 1048576
     },
     "claude": {
       "model": "claude-3-5-sonnet-20241022",
       "enabled": true,
-      "skip_in_test": false
+      "skip_in_test": false,
+      "context_length": 200000
     },
     "local": {
       "model": "gemma-4-26b",
@@ -18,7 +20,8 @@
       "skip_in_test": true,
       "health_check": true,
       "thinking_budget": -1,
-      "max_tokens": 1024
+      "max_tokens": 1024,
+      "context_length": 131072
     }
   },
   "routing_rules": [

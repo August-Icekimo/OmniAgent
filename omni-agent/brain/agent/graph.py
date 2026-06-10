@@ -71,12 +71,16 @@ class AgentState(TypedDict):
     skill_result: Optional[Dict[str, Any]]
     final_reply: Optional[str]
     model_router: ModelRouter
-    
+
     # --- Phase 4A 動態路由相關 ---
     selected_provider: Optional[str]
     routing_reason: Optional[str]
     upgrade_requested: bool
     attachment: Optional[Dict[str, Any]]
+
+    # 產生 final_reply 的那次 LLM call 的 usage（input/output tokens），
+    # 供 main.py 回填 BrainResponse 的 context_tokens（gateway footer 用）。
+    last_usage: Optional[Dict[str, Any]]
 
 def _is_upgrade_signal(content: str) -> bool:
     """Return True if local model output contains an upgrade_needed flag."""
@@ -260,7 +264,8 @@ async def planner_node(state: AgentState):
             "upgrade_requested": upgrade_requested,
             "plan": plan,
             "final_reply": final_reply,
-            "messages": messages
+            "messages": messages,
+            "last_usage": response.usage
         }
     finally:
         timer.emit()
@@ -364,8 +369,8 @@ async def reporter_node(state: AgentState):
         if not reply or len(reply.strip()) == 0:
             logger.warning("Cindy soul response was empty, using analysis result as fallback.")
             reply = f"嗯……我看到了這個貼圖：{analysis}"
-            
-        return {"final_reply": reply}
+
+        return {"final_reply": reply, "last_usage": response.usage}
 
     report_prompt = f"""
     ## Skill Result
@@ -381,7 +386,7 @@ async def reporter_node(state: AgentState):
         provider=state.get("selected_provider"),
         caller="reporter_node"
     )
-    return {"final_reply": response.content}
+    return {"final_reply": response.content, "last_usage": response.usage}
 
 # --- Router ---
 
