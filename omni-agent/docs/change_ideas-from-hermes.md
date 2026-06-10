@@ -32,7 +32,9 @@ hermes 對應實作參考：
 
 **Out of scope:**
 - iMessage（BlueBubbles）的 reply 標注
-- Telegram `reply_to_mode` 多段設定（OmniAgent 目前不切段 Telegram 訊息，固定等同 hermes 的 `first` 行為）
+- Telegram `reply_to_mode` 多段設定（固定 hermes 的 `first` 行為：僅首段帶引用）
+  - ~~不切段 Telegram 訊息~~ 實測推翻：升級 gemini 後長輸出成常態，>4096 units 被
+    API 拒收且訊息靜默丟失，已補 UTF-16 切段（v1.2）
 - footer 的 per-user / per-platform 細粒度設定（只做全域 env 開關）
 - streaming（OmniAgent 為同步 request/response，不存在 hermes 的 trailing footer 問題）
 
@@ -162,3 +164,4 @@ CREATE INDEX idx_lpr_line_id_state ON line_pending_replies (line_id, state);
 |---|---|---|
 | 1.0 | 2026-06-10 | Initial proposal |
 | 1.1 | 2026-06-10 | 新增 Task 8：輸入中指示器取代 👀/👂 文字 ack（hermes 模式），ack 不再消耗 Push 額度 |
+| 1.2 | 2026-06-10 | 實機測試修正：LINE loading 202 視為成功；local 硬截確定性升級（finish_reason=length）；Telegram UTF-16 切段（4000 units，首段帶引用） |

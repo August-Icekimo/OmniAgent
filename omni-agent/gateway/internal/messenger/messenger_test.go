@@ -36,6 +36,32 @@ func TestChunkText(t *testing.T) {
 	}
 }
 
+func TestChunkTextUTF16(t *testing.T) {
+	cases := []struct {
+		name      string
+		text      string
+		size      int
+		wantParts int
+	}{
+		{"短文不切", "hello", 10, 1},
+		{"BMP 中文每字 1 unit", strings.Repeat("家", 12), 10, 2},
+		{"emoji 每個 2 units", strings.Repeat("😀", 6), 10, 2},
+		{"剛好等於上限", strings.Repeat("a", 10), 10, 1},
+		{"空字串", "", 10, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := chunkTextUTF16(c.text, c.size)
+			if len(got) != c.wantParts {
+				t.Fatalf("段數 = %d, 預期 %d (%q)", len(got), c.wantParts, got)
+			}
+			if strings.Join(got, "") != c.text {
+				t.Errorf("重組後與原文不符")
+			}
+		})
+	}
+}
+
 func TestReplyTokenUsable(t *testing.T) {
 	now := time.Now().Unix()
 	cases := []struct {

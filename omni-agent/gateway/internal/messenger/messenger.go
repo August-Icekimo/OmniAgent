@@ -28,6 +28,8 @@ const (
 	lineChunkSize = 4500
 	// LINE Reply/Push 單次 API call 最多 5 個訊息物件。
 	lineBatchSize = 5
+	// Telegram 單則上限 4096 UTF-16 code units，保守切 4000。
+	telegramChunkSize = 4000
 )
 
 // SendOptions 攜帶單次投遞的平台提示。零值（或 nil）行為等同舊版純 Push。
@@ -118,6 +120,34 @@ type lineAction struct {
 	Type  string `json:"type"`
 	Label string `json:"label"`
 	Data  string `json:"data"`
+}
+
+// chunkTextUTF16 以 UTF-16 code unit 計數切段（Telegram 的長度單位）：
+// BMP 字元算 1、輔助平面（emoji 等）算 2。
+func chunkTextUTF16(text string, size int) []string {
+	var chunks []string
+	var buf []rune
+	count := 0
+	for _, r := range text {
+		units := 1
+		if r > 0xFFFF {
+			units = 2
+		}
+		if count+units > size && len(buf) > 0 {
+			chunks = append(chunks, string(buf))
+			buf = buf[:0]
+			count = 0
+		}
+		buf = append(buf, r)
+		count += units
+	}
+	if len(buf) > 0 {
+		chunks = append(chunks, string(buf))
+	}
+	if len(chunks) == 0 {
+		return []string{text}
+	}
+	return chunks
 }
 
 // chunkText 以 rune 為單位切段，避免在多位元組字元中間斷開。
@@ -373,31 +403,41 @@ func sendTelegramMessage(chatID, text string, opts *SendOptions) error {
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 
-	payload := map[string]any{
-		"chat_id": chatID,
-		"text":    text,
-	}
-	// allow_sending_without_reply：原訊息被刪時自動退化為普通訊息，免重試。
-	if opts != nil && opts.ReplyToMessageID != "" {
-		if msgID, err := strconv.Atoi(opts.ReplyToMessageID); err == nil {
-			payload["reply_parameters"] = map[string]any{
-				"message_id":                  msgID,
-				"allow_sending_without_reply": true,
+	var firstErr error
+	for i, chunk := range chunkTextUTF16(text, telegramChunkSize) {
+		payload := map[string]any{
+			"chat_id": chatID,
+			"text":    chunk,
+		}
+		// reply 標注只掛首段（hermes 的 "first" 模式），避免一串重複引用框。
+		// allow_sending_without_reply：原訊息被刪時自動退化為普通訊息，免重試。
+		if i == 0 && opts != nil && opts.ReplyToMessageID != "" {
+			if msgID, err := strconv.Atoi(opts.ReplyToMessageID); err == nil {
+				payload["reply_parameters"] = map[string]any{
+					"message_id":                  msgID,
+					"allow_sending_without_reply": true,
+				}
 			}
 		}
+
+		jsonBody, _ := json.Marshal(payload)
+		resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonBody))
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("Telegram API returned status %d: %s", resp.StatusCode, string(respBody))
+			}
+			continue
+		}
+		resp.Body.Close()
 	}
 
-	jsonBody, _ := json.Marshal(payload)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Telegram API returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
+	return firstErr
 }
