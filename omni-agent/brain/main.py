@@ -353,13 +353,18 @@ async def auto_confirm_model_upgrade(app, orig_msg: StandardMessage, state: dict
                         )
             
             # TODO: 支援 LINE 及其它平台
-            # 儲存對話 (含 Metadata)
-            metadata = {
-                "model": final_state.get("selected_provider"),
-                "provider": final_state.get("selected_provider"),
-                "routing_reason": "auto_confirm"
-            }
-            asyncio.create_task(app.state.short_term.save(user_id, orig_msg.platform, round_messages, metadata))
+            # 儲存對話 (含 Metadata)，比照 /chat 主流程：舉旗 JSON 不入庫
+            if "upgrade_needed" not in reply_text:
+                metadata = {
+                    "model": final_state.get("selected_provider"),
+                    "provider": final_state.get("selected_provider"),
+                    "routing_reason": "auto_confirm"
+                }
+                round_messages = [
+                    {"role": "user", "content": orig_msg.text or ""},
+                    {"role": "assistant", "content": reply_text}
+                ]
+                asyncio.create_task(app.state.short_term.save(user_id, orig_msg.platform, round_messages, metadata))
             
         except Exception as e:
             logger.error(f"Auto-confirm execution failed: {e}")
