@@ -244,6 +244,9 @@ async def planner_node(state: AgentState):
             )
             timer.end_span("plan_upgrade_llm_ms")
             content = response.content
+            if getattr(response, "finish_reason", "") == "length":
+                # 升級鏈頂層仍被截斷：無路可升，至少留下可見訊號（考慮調高 max_tokens）
+                logger.warning("Upgrade provider output also hit max_tokens; reply is truncated")
             logger.info(f"[planner_debug] upgrade response (first 300 chars): {content[:300]!r}")
             selected_provider = "gemini"
             routing_reason = "self_upgrade"

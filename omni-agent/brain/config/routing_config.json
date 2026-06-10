@@ -6,7 +6,8 @@
       "skip_in_test": false,
       "thinking_budget": -1,
       "upgrade_model": "gemini-2.5-pro",
-      "context_length": 1048576
+      "context_length": 1048576,
+      "max_tokens": 8192
     },
     "claude": {
       "model": "claude-3-5-sonnet-20241022",
