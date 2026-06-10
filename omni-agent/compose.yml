@@ -53,6 +53,8 @@ services:
     restart: unless-stopped
     environment:
       TZ: Asia/Taipei
+      # 終端機技能：brain 透過此內網位址呼叫沙箱 exec 服務
+      SANDBOX_URL: http://sandbox:8000
 
   skills:
     build:
@@ -76,5 +78,29 @@ services:
       TZ: Asia/Taipei
     restart: unless-stopped
 
+  sandbox:
+    build:
+      context: ./sandbox
+    container_name: omni-agent-sandbox-1
+    # 終端機技能的執行環境：僅 compose 內網可達，不發布 host port。
+    # 刻意不掛 .env（隔絕 secret，達成天然 env 刮除）。
+    environment:
+      TZ: Asia/Taipei
+    # 檔案系統唯讀，僅 /sandbox/work 與 tmpfs 可寫
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - sandbox-work:/sandbox/work
+    # 資源限制：防失控命令拖垮主機
+    mem_limit: 512m
+    pids_limit: 256
+    cpus: 1.0
+    # 縮小攻擊面：禁止提權
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
 volumes:
   omni-workspace:
+  sandbox-work:
