@@ -124,3 +124,4 @@ hermes 對應實作參考：
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-06-10 | Initial proposal |
+| 1.1 | 2026-06-10 | Archived — implementation complete |
