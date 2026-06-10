@@ -48,6 +48,8 @@ graph TD
     %% 流程
     SENSES -- "即時回應" --> CADDY
     BRAIN -- "驅動技能" --> SKILLS["MCP Skills<br/>(HomeAssistant/Proxmox/WoL)"]
+    BRAIN -- "網路搜尋" --> SEARXNG["SearXNG<br/>(自架、內網)"]
+    BRAIN -- "終端機命令" --> SANDBOX["Sandbox<br/>(受限容器、內網)"]
     BRAIN -- "智慧路由" --> MLX
     BRAIN -- "智慧路由" --> CLAUDE
     BRAIN -- "智慧路由" --> GEMINI
@@ -63,7 +65,9 @@ graph TD
 3.  **智慧模型路由 (ModelRouter)**: 內建原廠 SDK 適配器（Claude, Gemini, Local MLX），支援 Prompt/Context Caching 且具備自動模型升級策略 (Escalation Strategy)。
 4.  **靈魂與人格注入 (SoulLoader)**: 透過 `SOUL.md` 與資料庫動態載入，定義 AI 的人格與情緒模組，讓回應具備一致且獨特的人格特質。
 5.  **自適應壓力感應 (StressManager)**: Go Gateway 監控系統負載，動態調整處理策略 (Graceful Degradation 或 Model Escalation)。
-6.  **安全與隱私**: 全機地端部署 (Self-hosted)，核心資料與狀態均存在本地 PostgreSQL，對外通訊皆經過加密並受 WAF 保護。
+6.  **即時網路搜尋 (Web Search)**: 透過自架的 SearXNG（內網限定）查詢新聞、天氣、時事等即時資訊，避免模型憑舊知識臆測。
+7.  **終端機技能 (Terminal Skill)**: 在獨立的受限沙箱容器執行 shell 命令查看系統狀態。僅限管理者本人 (`role=admin`)；安全唯讀命令 (allowlist) 免確認直接執行，其餘命令需先確認，危險命令一律阻擋。沙箱為唯讀檔案系統、非 root、不持有任何 secret、僅內網可達。
+8.  **安全與隱私**: 全機地端部署 (Self-hosted)，核心資料與狀態均存在本地 PostgreSQL，對外通訊皆經過加密並受 WAF 保護。
 
 
 ## 快速開始

@@ -1,0 +1,4 @@
+# 沙箱 exec 服務僅需 ASGI server，不依賴 LLM SDK / DB（刻意保持極小，降低攻擊面）
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pydantic>=2.11.0

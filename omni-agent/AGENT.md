@@ -45,7 +45,7 @@ Real World (LINE / Telegram / iMessage)
 │    ├─ Claude (anthropic SDK + cache)    │
 │    ├─ Gemini (google-genai API Key)      │
 │    └─ Local MLX (openai SDK → Mac Mini) │
-│  · MCP Skills invocation                │
+│  · Skills: web search, terminal, files  │
 │  · RAG memory retrieval (pgvector)      │
 └───────────────┬─────────────────────────┘
                 ▼
@@ -178,8 +178,10 @@ omni-agent/
 │   ├── memory/
 │   │   ├── short_term.py          # conversations table
 │   │   └── long_term.py           # pgvector RAG
-│   ├── skills/                    # MCP tool implementations
+│   ├── skills/                    # In-process skill implementations
 │   │   ├── file_analyzer.py
+│   │   ├── web_search.py          # SearXNG thin client
+│   │   ├── terminal.py            # Sandbox exec thin client (admin-only)
 │   │   ├── wake_on_lan.py
 │   │   ├── proxmox.py
 │   │   └── home_assistant.py
@@ -190,6 +192,10 @@ omni-agent/
 ├── skills/                        # Skills Server (Go)
 │   ├── main.go
 │   └── handler/
+│
+├── sandbox/                       # Terminal skill exec env (FastAPI, isolated container)
+│   ├── exec_server.py
+│   └── Dockerfile
 │
 ├── db/
 │   ├── SCHEMA.md
@@ -228,6 +234,8 @@ omni-agent/
 | 4a | Dynamic ModelRouter + routing_config.json | ✅ |
 | 4b | File analysis + FileAnalyzer skill | ✅ |
 | 4c | Gemini OAuth integration (removed 2026-06-10, replaced by API Key) | ✅ |
+| 4d | Web search skill (self-hosted SearXNG) | ✅ |
+| 4e | Terminal skill (sandboxed exec, admin-only, allowlist) | ✅ |
 
 Phase history archived at `openspec/changes/archive/`.
 

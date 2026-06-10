@@ -313,9 +313,39 @@ async def confirmer_node(state: AgentState):
     if not plan:
         return {}
 
+    # --- terminal 技能：admin 閘門 + allowlist/危險命令判定（不信任 LLM 給的 is_write）---
+    if plan.get("skill") == "terminal":
+        from skills.terminal import is_allowlisted, is_dangerous
+
+        command = str((plan.get("params") or {}).get("command") or "").strip()
+
+        # 1. admin 閘門：只有本人（users.role == 'admin'）能用終端機
+        pool = getattr(state["model_router"], "_db_pool", None)
+        is_admin = False
+        if pool:
+            try:
+                row = await pool.fetchrow(
+                    "SELECT role FROM users WHERE id = $1", state.get("user_id")
+                )
+                is_admin = bool(row and row["role"] == "admin")
+            except Exception as e:
+                logger.warning(f"terminal admin check failed: {e}")
+        if not is_admin:
+            logger.info(f"terminal denied for non-admin user {state.get('user_id')}")
+            return {"final_reply": "這個我只聽 Iceman 的，沒辦法幫你在系統上執行命令喔。"}
+
+        # 2. 危險命令：直接拒絕，不進入確認/執行
+        danger = is_dangerous(command)
+        if danger:
+            logger.warning(f"terminal blocked dangerous command ({danger}): {command!r}")
+            return {"final_reply": f"這個命令太危險了（{danger}），我不能幫你跑。"}
+
+        # 3. allowlist 決定是否免確認；覆寫 is_write 後交給下方既有確認邏輯
+        plan["is_write"] = not is_allowlisted(command)
+
     # 如果不是寫操作，或者已經收到確認，直接跳過
     if not plan.get("is_write") or state["confirmation_received"]:
-        return {}
+        return {"plan": plan}
     
     # 如果是寫操作且尚未確認，回覆確認請求
     summary = plan.get("summary", "執行此操作")
@@ -353,6 +383,22 @@ async def executor_node(state: AgentState):
         if not query:
             return {"skill_result": {"success": False, "error": "缺少搜尋關鍵字 query"}}
         result = await provider.search(query, limit=params.get("limit", 5))
+        return {"skill_result": result}
+
+    # --- terminal: in-process 執行，呼叫沙箱容器 exec 服務 ---
+    if plan and plan.get("skill") == "terminal":
+        from skills.terminal import get_terminal_skill
+        skill = get_terminal_skill()
+        params = plan.get("params") or {}
+        command = str(params.get("command") or "").strip()
+        if not command:
+            return {"skill_result": {"success": False, "error": "缺少命令 command"}}
+        result = await skill.execute(
+            command,
+            timeout=params.get("timeout", 30),
+            background=bool(params.get("background", False)),
+            task_id=params.get("task_id"),
+        )
         return {"skill_result": result}
 
     skills_url = os.getenv("SKILLS_URL")
