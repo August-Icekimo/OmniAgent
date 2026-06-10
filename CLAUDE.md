@@ -28,7 +28,7 @@ podman compose down
 
 ```bash
 cd omni-agent && cp .env.example .env
-# Fill: ANTHROPIC_API_KEY, GEMINI_API_KEY/OAuth, POSTGRES_*, LINE_*, TELEGRAM_*
+# Fill: ANTHROPIC_API_KEY, GEMINI_API_KEY, POSTGRES_*, LINE_*, TELEGRAM_*
 ```
 
 DB migrations auto-run from `db/migrations/*.sql` on first startup.

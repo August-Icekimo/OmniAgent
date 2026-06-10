@@ -47,7 +47,7 @@ Commands located at `.claude/commands/opsx-*.md`.
 ## LLM Provider Config
 
 Edit `brain/config/routing_config.json` to change routing.
-Default: `gemini_oauth` (Gemini 2.5 Pro via OAuth).
+Default fallback chain: `gemini` (2.5 Flash API Key) → `claude` → `local`.
 
 **Never hardcode model names** in application code. Always use routing config.
 

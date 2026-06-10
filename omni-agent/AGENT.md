@@ -43,7 +43,7 @@ Real World (LINE / Telegram / iMessage)
 │  · SoulLoader: build system prompt      │
 │  · ModelRouter: vendor SDK routing      │
 │    ├─ Claude (anthropic SDK + cache)    │
-│    ├─ Gemini (google-genai + OAuth)     │
+│    ├─ Gemini (google-genai API Key)      │
 │    └─ Local MLX (openai SDK → Mac Mini) │
 │  · MCP Skills invocation                │
 │  · RAG memory retrieval (pgvector)      │
@@ -134,7 +134,6 @@ Full DDL in `db/migrations/`. Reference `db/SCHEMA.md`.
 | `message_queue` | SKIP LOCKED queue (priority, status, stress_level) |
 | `stress_logs` | Cerebellum diary (level, metrics, mood) |
 | `home_context` | Device/environment state (JSONB, active flag) |
-| `oauth_tokens` | Gemini OAuth token cache |
 
 **Rule:** Confirm schema changes BEFORE writing app code. Always.
 
@@ -171,7 +170,6 @@ omni-agent/
 │   │   ├── base.py                # ModelClient ABC
 │   │   ├── claude_client.py       # anthropic SDK + prompt caching
 │   │   ├── gemini_client.py       # google-genai SDK + context caching
-│   │   ├── oauth_gemini_client.py # OAuth 2.0 Gemini
 │   │   ├── local_client.py        # openai SDK → Mac Mini MLX
 │   │   └── router.py              # Routing + escalation
 │   ├── config/
@@ -229,7 +227,7 @@ omni-agent/
 | 4 | Identity system + MCP Skills (WoL, Cockpit) | ✅ |
 | 4a | Dynamic ModelRouter + routing_config.json | ✅ |
 | 4b | File analysis + FileAnalyzer skill | ✅ |
-| 4c | Gemini OAuth integration | ✅ |
+| 4c | Gemini OAuth integration (removed 2026-06-10, replaced by API Key) | ✅ |
 
 Phase history archived at `openspec/changes/archive/`.
 
@@ -389,7 +387,7 @@ ssh VivienLeigh "docker logs --tail 50 <container>"
 ### Environment Setup
 ```bash
 cp .env.example .env
-# Fill: ANTHROPIC_API_KEY, GEMINI_API_KEY/OAuth, POSTGRES_*, LINE_*, TELEGRAM_*
+# Fill: ANTHROPIC_API_KEY, GEMINI_API_KEY, POSTGRES_*, LINE_*, TELEGRAM_*
 ```
 
 DB migrations auto-run from `db/migrations/*.sql` on first startup.

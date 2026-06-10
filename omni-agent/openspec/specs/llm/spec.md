@@ -1,24 +1,5 @@
 ## ADDED Requirements
 
-### Requirement: OAuth Gemini Integration
-The system must support calling Google Gemini API using OAuth 2.0 credentials from a Google AI Premium subscription.
-
-#### Scenario: Successful Chat with Valid Token
-- **WHEN** a chat request is made and a valid OAuth access token is cached in the database
-- **THEN** the request must be sent to Gemini API using the cached token
-- **AND** no token refresh should be triggered
-
-#### Scenario: Automatic Token Refresh
-- **WHEN** a chat request is made and the cached OAuth access token is expired or missing
-- **THEN** the system must call the Google OAuth refresh endpoint
-- **AND** store the new access token in the database
-- **AND** proceed with the original chat request
-
-#### Scenario: Fallback to API Key
-- **WHEN** the OAuth token refresh fails (e.g., revoked token, network error)
-- **THEN** the `ModelRouter` must fall back to the standard API key provider
-- **AND** the `BrainResponse` should indicate the fallback reason
-
 ### Requirement: Dynamic Model Routing
 The system must dynamically select the best provider based on task context and complexity.
 
