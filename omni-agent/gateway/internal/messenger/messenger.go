@@ -352,7 +352,8 @@ func postLineAPI(url string, payload any) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	// loading/start 成功回 202 Accepted，其餘 API 回 200 — 2xx 一律視為成功
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("LINE API returned status %d: %s", resp.StatusCode, string(respBody))
 	}
