@@ -255,6 +255,7 @@ class ModelRouter:
             provider_config = self._config.get("providers", {}).get(target, {})
             target_model = provider_config.get("model")
             target_thinking_budget = thinking_budget if thinking_budget is not None else provider_config.get("thinking_budget", -1)
+            target_max_tokens = provider_config.get("max_tokens", max_tokens)
 
             if i > 0:
                 logger.warning(f"Fallback triggered: {candidates[0]} failed (likely Quota/429), trying {target}...")
@@ -268,7 +269,7 @@ class ModelRouter:
                         messages,
                         system_prompt=system_prompt,
                         temperature=temperature,
-                        max_tokens=max_tokens,
+                        max_tokens=target_max_tokens,
                         thinking_budget=target_thinking_budget,
                         model=target_model
                     )
@@ -278,7 +279,7 @@ class ModelRouter:
                         messages,
                         system_prompt=system_prompt,
                         temperature=temperature,
-                        max_tokens=max_tokens
+                        max_tokens=target_max_tokens
                     )
                 
                 # 如果是退路觸發的，加上思考表情符號

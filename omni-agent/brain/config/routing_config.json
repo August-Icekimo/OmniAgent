@@ -17,7 +17,8 @@
       "enabled": true,
       "skip_in_test": true,
       "health_check": true,
-      "thinking_budget": -1
+      "thinking_budget": -1,
+      "max_tokens": 1024
     },
     "gemini_oauth": {
       "model": "gemini-2.5-pro",
