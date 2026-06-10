@@ -241,7 +241,10 @@ async def chat(msg: StandardMessage):
         "complexity": None,
         "complexity_reason": None,
         "upgrade_requested": False,
-        "attachment": msg.attachment.model_dump() if msg.attachment else None
+        "attachment": msg.attachment.model_dump() if msg.attachment else None,
+        # 確認往返：帶回 pending plan 與確認狀態（planner 偵測到已有 plan 會跳過重新規劃）
+        "plan": pending_plan,
+        "confirmation_received": confirmation_received,
     }
 
     try:
@@ -291,6 +294,22 @@ async def chat(msg: StandardMessage):
             )
             # 啟動 15s 自動確認任務
             asyncio.create_task(auto_confirm_model_upgrade(app, msg, final_state))
+
+        # 9b. 技能確認往返：confirmer_node 回了確認問句但尚未執行時，存下 pending plan，
+        # 下一則訊息若同意（main.py 開頭的 confirm:pending 檢查）即帶回 plan 直接執行。
+        final_plan = final_state.get("plan")
+        if (
+            pool
+            and final_plan
+            and final_plan.get("is_write")
+            and not confirmation_received
+            and not final_state.get("skill_result")  # 尚未執行才需確認
+        ):
+            await pool.execute(
+                "INSERT INTO home_context (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                f"confirm:pending:{msg.user_id}",
+                json.dumps(final_plan),
+            )
 
         usage = final_state.get("last_usage") or {}
         context_tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
