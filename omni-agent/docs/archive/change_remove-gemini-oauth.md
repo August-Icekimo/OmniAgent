@@ -137,3 +137,4 @@ curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" \
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-06-10 | Initial proposal |
+| 1.1 | 2026-06-10 | Archived — implementation complete |
