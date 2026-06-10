@@ -219,8 +219,17 @@ async def planner_node(state: AgentState):
             logger.warning("Local model returned empty content, treating as upgrade signal")
             content = '{"upgrade_needed": true}'
 
+        # 確定性保底：輸出被 max_tokens 硬截（finish_reason=length）直接升級重試，
+        # 不依賴模型自覺舉旗——對話歷史的續寫慣性常壓過 prompt 指令
+        truncated = (
+            selected_provider == "local"
+            and getattr(response, "finish_reason", "") == "length"
+        )
+        if truncated:
+            logger.info("Local output hit max_tokens (finish_reason=length), treating as upgrade signal")
+
         # 偵測舉旗訊號，靜默升級至 gemini
-        if _is_upgrade_signal(content):
+        if truncated or _is_upgrade_signal(content):
             timer.end_span("plan_skill_parse_ms")
             timer.start_span()
             logger.info("Local model signaled upgrade, retrying with gemini")
