@@ -344,6 +344,17 @@ async def executor_node(state: AgentState):
         )
         return {"skill_result": {"status": "ok", "analysis": result}}
 
+    # --- web_search: in-process 執行，不經 Go Skills Server ---
+    if plan and plan.get("skill") == "web_search":
+        from skills.web_search import get_web_search_provider
+        provider = get_web_search_provider()
+        params = plan.get("params") or {}
+        query = str(params.get("query") or "").strip()
+        if not query:
+            return {"skill_result": {"success": False, "error": "缺少搜尋關鍵字 query"}}
+        result = await provider.search(query, limit=params.get("limit", 5))
+        return {"skill_result": result}
+
     skills_url = os.getenv("SKILLS_URL")
     
     if not skills_url:
@@ -398,6 +409,38 @@ async def reporter_node(state: AgentState):
             reply = f"嗯……我看到了這個貼圖：{analysis}"
 
         return {"final_reply": reply, "last_usage": response.usage}
+
+    if plan and plan.get("skill") == "web_search":
+        # 搜尋結果是外部不可信文本：以明確邊界標記注入，並限制只根據結果回答
+        if result.get("success"):
+            web = result.get("data", {}).get("web", [])
+            lines = [
+                f"{r['position']}. {r['title']}\n   來源：{r['url']}\n   {r['description']}"
+                for r in web
+            ]
+            results_block = "\n".join(lines) if lines else "（沒有任何結果）"
+            query = (plan.get("params") or {}).get("query", "")
+            report_prompt = f"""
+[搜尋結果開始]（查詢：{query}）
+{results_block}
+[搜尋結果結束]
+
+以 Cindy 的語氣回答使用者的問題。只根據上方 [搜尋結果] 的內容回答，並附上引用的來源網址；結果沒提到的不要編造。如果搜尋結果與問題無關或不足以回答，誠實說沒找到。不要輸出 JSON。
+"""
+        else:
+            report_prompt = f"""
+## 搜尋失敗
+原因：{result.get('error', '未知錯誤')}
+
+以 Cindy 的語氣誠實告訴使用者：網路搜尋暫時無法使用，所以拿不到即時資訊。簡短說明原因即可，不要編造答案，不要輸出 JSON。
+"""
+        response = await router.chat(
+            state["messages"],
+            system_prompt=state["system_prompt"] + "\n\n" + report_prompt,
+            provider=state.get("selected_provider"),
+            caller="reporter_node_web_search"
+        )
+        return {"final_reply": response.content, "last_usage": response.usage}
 
     report_prompt = f"""
     ## Skill Result

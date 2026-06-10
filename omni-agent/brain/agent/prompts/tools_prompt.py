@@ -20,6 +20,11 @@ def build_tools_prompt(skills_url: str | None = None) -> str:
 - home_assistant: 家庭自動化（尚未實作）。
   - 类型: [Read]
 
+- web_search: 搜尋網路上的即時資訊（新聞、天氣、店家、時事、你不確定的最新知識）。
+  - params: {"query": "搜尋關鍵字", "limit": 5}
+  - 类型: [Read]
+  - 涉及「現在 / 今天 / 最新 / 最近」或你訓練資料之後的事實性問題，優先呼叫 web_search，不要憑記憶猜測。一般閒聊或意見交流不需要搜尋。
+
 如果需要呼叫技能，請在輸出的 JSON 中包含以下格式：
 ```json
 {
