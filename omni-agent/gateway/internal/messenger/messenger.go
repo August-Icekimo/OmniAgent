@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"io"
@@ -18,8 +20,9 @@ import (
 )
 
 const (
-	lineReplyURL = "https://api.line.me/v2/bot/message/reply"
-	linePushURL  = "https://api.line.me/v2/bot/message/push"
+	lineReplyURL   = "https://api.line.me/v2/bot/message/reply"
+	linePushURL    = "https://api.line.me/v2/bot/message/push"
+	lineLoadingURL = "https://api.line.me/v2/bot/chat/loading/start"
 
 	// LINE 單則泡泡上限 5000 字，保守切 4500（同 hermes 策略）。
 	lineChunkSize = 4500
@@ -206,6 +209,109 @@ func SendLineSlowReplyButton(replyToken, rid string) error {
 		},
 	}
 	return SendLineReply(replyToken, []lineMessage{msg})
+}
+
+// SendLineLoading 觸發 LINE 的 loading 動畫指示器（免費、不佔訊息額度）。
+// 僅支援 1:1（chat_id 開頭 U），最長 60 秒，bot 回覆時自動消失。
+// best-effort：失敗只記 log，絕不影響訊息處理流程。
+func SendLineLoading(lineID string) {
+	if !strings.HasPrefix(lineID, "U") {
+		return
+	}
+	body := struct {
+		ChatID         string `json:"chatId"`
+		LoadingSeconds int    `json:"loadingSeconds"`
+	}{ChatID: lineID, LoadingSeconds: 60}
+	if err := postLineAPI(lineLoadingURL, body); err != nil {
+		log.Printf("LINE: loading indicator failed (non-fatal): %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Telegram 輸入中指示器
+// sendChatAction 平台端約 5 秒過期，需迴圈刷新（同 hermes _keep_typing 策略）。
+// registry 為暫態（in-memory）：gateway 重啟遺失只是指示器消失，可接受。
+// ---------------------------------------------------------------------------
+
+var (
+	typingMu    sync.Mutex
+	typingStops = map[string]chan struct{}{}
+)
+
+const (
+	typingRefreshInterval = 4 * time.Second
+	typingMaxDuration     = 90 * time.Second
+)
+
+// SendTelegramTypingOnce 發送單次輸入中指示（約 5 秒），供下載附件等
+// 入 queue 前的空窗使用，無需配對 Stop。
+func SendTelegramTypingOnce(chatID string) {
+	sendTelegramChatAction(chatID)
+}
+
+// StartTelegramTyping 啟動輸入中刷新迴圈，至 StopTyping(msgId) 或 90 秒上限。
+func StartTelegramTyping(msgId, chatID string) {
+	stop := make(chan struct{})
+	typingMu.Lock()
+	if old, ok := typingStops[msgId]; ok {
+		close(old)
+	}
+	typingStops[msgId] = stop
+	typingMu.Unlock()
+
+	go func() {
+		defer func() {
+			typingMu.Lock()
+			if typingStops[msgId] == stop {
+				delete(typingStops, msgId)
+			}
+			typingMu.Unlock()
+		}()
+		deadline := time.NewTimer(typingMaxDuration)
+		defer deadline.Stop()
+		ticker := time.NewTicker(typingRefreshInterval)
+		defer ticker.Stop()
+
+		sendTelegramChatAction(chatID)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-deadline.C:
+				return
+			case <-ticker.C:
+				sendTelegramChatAction(chatID)
+			}
+		}
+	}()
+}
+
+// StopTyping 停止指定訊息的輸入中刷新（投遞完成或失敗時呼叫）。
+// 未啟動過或已停止時為 no-op。
+func StopTyping(msgId string) {
+	typingMu.Lock()
+	defer typingMu.Unlock()
+	if stop, ok := typingStops[msgId]; ok {
+		delete(typingStops, msgId)
+		close(stop)
+	}
+}
+
+func sendTelegramChatAction(chatID string) {
+	token := os.Getenv("TELEGRAM_BOT_TOKEN")
+	if token == "" {
+		return
+	}
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendChatAction", token)
+	payload := map[string]string{"chat_id": chatID, "action": "typing"}
+	jsonBody, _ := json.Marshal(payload)
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return // best-effort：網路慢就放棄這一拍，下一拍照常
+	}
+	resp.Body.Close()
 }
 
 // ResolveLineID 將內部 UUID 解析為 LINE 平台 ID（U 開頭）；

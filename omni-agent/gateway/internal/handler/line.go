@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"omni-agent/gateway/internal/messenger"
@@ -23,11 +22,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-)
-
-var (
-	lineAckMap  = make(map[string]time.Time)
-	lineAckLock sync.Mutex
 )
 
 type lineWebhookBody struct {
@@ -110,6 +104,9 @@ func LineWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 				log.Printf("LINE user not registered in line_accounts: %s, using raw ID as fallback", event.Source.UserId)
 			}
 
+			// 即時回饋：loading 動畫（免費，bot 回覆時自動消失，僅 DM 有效）
+			go messenger.SendLineLoading(event.Source.UserId)
+
 			// 2. Message Parsing
 			messageType := event.Message.Type
 			text := event.Message.Text
@@ -117,18 +114,15 @@ func LineWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 
 			switch messageType {
 			case "image":
-				sendLineMultimodalAck(db, "line", event.Source.UserId, "image")
 				attachment, err = downloadLineContent(c.Request.Context(), userIDStr, event.Message.Id, "image.jpg", "image/jpeg")
 			case "audio":
 				messageType = "voice"
-				sendLineMultimodalAck(db, "line", event.Source.UserId, "voice")
 				attachment, err = downloadLineContent(c.Request.Context(), userIDStr, event.Message.Id, "audio.m4a", "audio/x-m4a")
 				if attachment != nil {
 					attachment.MediaType = "voice"
 					attachment.DurationMs = event.Message.Duration
 				}
 			case "sticker":
-				sendLineMultimodalAck(db, "line", event.Source.UserId, "image")
 				attachment, err = downloadLineSticker(c.Request.Context(), userIDStr, event.Message.PackageId, event.Message.StickerId)
 				if err != nil {
 					log.Printf("Sticker download failed: %v", err)
@@ -298,35 +292,6 @@ func handleLinePostback(db *pgxpool.Pool, lineID, replyToken, data string) {
 	}
 	if sendErr := messenger.SendLineReplyText(replyToken, lineID, hint); sendErr != nil {
 		log.Printf("LINE: postback hint send failed for rid %s: %v", rid, sendErr)
-	}
-}
-
-func sendLineMultimodalAck(db *pgxpool.Pool, platform, lineID, modality string) {
-	lineAckLock.Lock()
-	defer lineAckLock.Unlock()
-
-	now := time.Now()
-	if lastAck, ok := lineAckMap[lineID]; ok && now.Sub(lastAck) < 5*time.Second {
-		return
-	}
-
-	var ackText string
-	switch modality {
-	case "voice":
-		ackText = "👂..."
-	default:
-		ackText = "👀..."
-	}
-
-	messenger.SendReply(db, platform, lineID, ackText)
-	lineAckMap[lineID] = now
-
-	// Evict entries older than 30s to bound map growth.
-	cutoff := now.Add(-30 * time.Second)
-	for k, v := range lineAckMap {
-		if v.Before(cutoff) {
-			delete(lineAckMap, k)
-		}
 	}
 }
 

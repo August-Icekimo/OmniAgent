@@ -133,12 +133,12 @@ CREATE INDEX idx_lpr_line_id_state ON line_pending_replies (line_id, state);
 下載失敗等**錯誤訊息維持文字**回覆不變。
 
 **Acceptance Criteria:**
-- [ ] LINE DM 發訊息後立即出現 loading 動畫，Cindy 回覆時自動消失；期間不再收到 👀/👂 文字訊息
-- [ ] Telegram 發訊息後顯示「輸入中…」，brain 處理 30 秒以上仍持續顯示（刷新迴圈有效），回覆送達後停止
-- [ ] Telegram 刷新迴圈在投遞完成後確實退出（無 goroutine 洩漏），90 秒上限生效
-- [ ] LINE loading API 失敗（如非 DM、網路錯誤）不影響訊息處理流程
-- [ ] 檔案下載失敗仍收到文字錯誤訊息
-- [ ] ack 路徑不再產生任何計費 Push
+- [x] LINE DM 發訊息後立即出現 loading 動畫，Cindy 回覆時自動消失；期間不再收到 👀/👂 文字訊息
+- [x] Telegram 發訊息後顯示「輸入中…」，brain 處理 30 秒以上仍持續顯示（刷新迴圈有效），回覆送達後停止（forwarder defer StopTyping）
+- [x] Telegram 刷新迴圈在投遞完成後確實退出（無 goroutine 洩漏），90 秒上限生效
+- [x] LINE loading API 失敗（如非 DM、網路錯誤）不影響訊息處理流程（best-effort goroutine）
+- [x] 檔案下載失敗仍收到文字錯誤訊息
+- [x] ack 路徑不再產生任何計費 Push
 
 ---
 

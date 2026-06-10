@@ -161,6 +161,9 @@ func processNextMessage(db *pgxpool.Pool, brainURL string) bool {
 
 	log.Printf("Found message %s, sending to %s", msgId, brainURL)
 
+	// 無論投遞結果如何，本輪處理結束就停掉輸入中指示器（Telegram）
+	defer messenger.StopTyping(msgId)
+
 	var origMsg model.StandardMessage
 	_ = json.Unmarshal(payload, &origMsg)
 
