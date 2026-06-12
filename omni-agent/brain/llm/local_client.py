@@ -3,11 +3,82 @@
 chrysoberyl (MacBook Pro M4) 跑 gemma-4-26b (4-bit)，benchmarked:
   - 34.5 tok/s, TTFT ~120 ms (no-think), ~2.2 s (think, 18× slower)
 thinking_budget > 0 才啟用 enable_thinking；預設關閉。
+
+2026-06-12 起 server 以 --mllm --no-thinking 運行，支援圖片輸入
+（audio/video block Rapid-MLX 會靜默丟棄，本端直接拒收讓 router fallback）。
 """
 
+import base64
+import logging
 import os
+import re
+
 from openai import AsyncOpenAI
 from .base import ModelClient, Message, LLMResponse
+
+logger = logging.getLogger("brain.llm.local")
+
+# Gemma 4 在 MLLM 模式下 per-request enable_thinking 失效，模型會在答案後
+# 漏出 thought 標記接續碎念（google-deepmind/gemma#622），以 stop 截斷。
+# 代價：合法英文回應中的 "thought" 一詞也會被截斷 — 家庭中文場景可接受。
+_STOP_SEQUENCES = ["thought"]
+
+# thought 截斷點前偶見殘留的外文殘 token（實測出現過泰文 'ต์'）。
+# 這些文字在 Cindy 的家庭場景不可能合法出現，直接視為碎屑修剪。
+_FOREIGN_TAIL = re.compile(
+    r"[̀-ͯ֐-׿؀-ۿऀ-෿฀-๿]+$"
+)
+# 「有意義內容」：CJK、日韓、拉丁數字、emoji 與常用符號。
+_MEANINGFUL = re.compile(
+    r"[一-鿿㐀-䶿぀-ヿ가-힯"
+    r"A-Za-z0-9"
+    r"\U0001F000-\U0001FAFF☀-➿←-⇿⬀-⯿]"
+)
+
+
+def _to_openai_content(content):
+    """內部 multimodal block list → OpenAI chat content；純字串原樣回傳。
+
+    內部格式與 gemini_utils.build_gemini_parts 同源：
+    {"type": "text"|"image"|"audio"|"video", "mime_type": ..., "data": b64|bytes}
+    """
+    if isinstance(content, str):
+        return content
+    parts = []
+    for p in content:
+        ptype = p.get("type")
+        if ptype == "text":
+            parts.append({"type": "text", "text": p["text"]})
+        elif ptype == "image":
+            data = p["data"]
+            if isinstance(data, bytes):
+                data = base64.b64encode(data).decode("utf-8")
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{p['mime_type']};base64,{data}"},
+            })
+        else:
+            # Rapid-MLX 0.6.82 對 audio/video block 是靜默丟棄而非報錯，
+            # 模型會在沒拿到內容的情況下一本正經回覆 — 必須在本端擋下。
+            raise ValueError(f"LocalClient unsupported content block type: {ptype}")
+    return parts
+
+
+def _clean_output(text: str) -> str:
+    """清理 Gemma 4 MLLM 模式的輸出殘留（thought 漏標記、外文殘 token、孤立碎屑行）。"""
+    cleaned = text
+    # stop 序列理應已在 server 端截斷；此處為防禦（如 server 端 stop 失效）。
+    idx = cleaned.find("thought")
+    if idx != -1:
+        cleaned = cleaned[:idx]
+    cleaned = cleaned.rstrip()
+    cleaned = _FOREIGN_TAIL.sub("", cleaned).rstrip()
+    # 尾端孤立碎屑行：整行不含任何有意義字元（CJK/拉丁/數字/emoji）才修剪
+    if "\n" in cleaned:
+        head, _, tail = cleaned.rpartition("\n")
+        if tail.strip() and not _MEANINGFUL.search(tail):
+            cleaned = head.rstrip()
+    return cleaned
 
 
 class LocalClient(ModelClient):
@@ -44,7 +115,10 @@ class LocalClient(ModelClient):
         if system_prompt:
             oai_messages.append({"role": "system", "content": system_prompt})
         for m in messages:
-            oai_messages.append({"role": m.role.value, "content": m.content})
+            oai_messages.append({
+                "role": m.role.value,
+                "content": _to_openai_content(m.content),
+            })
 
         effective_budget = thinking_budget if thinking_budget is not None else self._thinking_budget
         # Always send enable_thinking explicitly — Gemma 4 defaults to thinking=on via chat template,
@@ -56,6 +130,7 @@ class LocalClient(ModelClient):
             messages=oai_messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            stop=_STOP_SEQUENCES,
             extra_body=extra,
         )
 
@@ -67,8 +142,16 @@ class LocalClient(ModelClient):
                 "output_tokens": response.usage.completion_tokens,
             }
 
+        raw_content = choice.message.content or ""
+        content = _clean_output(raw_content)
+        if content != raw_content:
+            logger.info(
+                "Local output cleaned: %d -> %d chars (finish_reason=%s)",
+                len(raw_content), len(content), choice.finish_reason,
+            )
+
         return LLMResponse(
-            content=choice.message.content or "",
+            content=content,
             model=self._model,
             provider="local",
             usage=usage,
@@ -83,4 +166,4 @@ class LocalClient(ModelClient):
         return self._model
 
     async def supports_vision(self) -> bool:
-        return False  # mlx-lm 目前不支援 vision
+        return True  # Rapid-MLX --mllm 模式，gemma-4-26b 含 vision tower
