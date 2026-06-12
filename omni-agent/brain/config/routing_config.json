@@ -34,6 +34,13 @@
       "priority": 100
     },
     {
+      "name": "sticker_perception",
+      "condition": "message_type in ('sticker', 'animation')",
+      "provider": "local",
+      "thinking_budget": 0,
+      "priority": 90
+    },
+    {
       "name": "short_simple",
       "condition": "text_length < 50 AND no_skill_intent",
       "provider": "local",

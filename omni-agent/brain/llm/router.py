@@ -1,6 +1,7 @@
 import logging
 import os
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -40,8 +41,9 @@ class ModelRouter:
     def select_provider(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """根據上下文決定初始 provider。"""
         # 0. 多模態強制路由至 Gemini API Key
+        #    sticker/animation 自 Phase 1 起改走 routing_rules（可路由至 local 視覺）
         msg_type = context.get("message_type", "text")
-        if msg_type in ["image", "voice", "sticker", "animation", "video"]:
+        if msg_type in ["image", "voice", "video"]:
             return {"provider": "gemini", "reason": f"multimodal:{msg_type}"}
 
         # 1. 檢查規則匹配
@@ -83,6 +85,11 @@ class ModelRouter:
             
             if "message_type == 'image'" in condition and msg_type == "image":
                 return True
+            in_match = re.search(r"message_type in \(([^)]+)\)", condition)
+            if in_match:
+                allowed = [s.strip().strip("'\"") for s in in_match.group(1).split(",")]
+                if msg_type in allowed:
+                    return True
             if "has_skill_intent" in condition and has_skill_intent:
                 return True
             if "text_length < 50" in condition and text_length < 50:
@@ -216,7 +223,7 @@ class ModelRouter:
         *,
         system_prompt: str | None = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         provider: str | None = None,
         thinking_budget: int | None = None,
         caller: str = "unknown"
@@ -239,27 +246,41 @@ class ModelRouter:
         fallback_triggered = False
         
         msg_type = "text"
+        has_audio_video = False
         for m in messages:
             if hasattr(m, 'content') and isinstance(m.content, list):
                  # This is a complex multimodal message part list (Phase 4D)
                  msg_type = "multimodal"
-                 break
+                 if any(p.get("type") in ("audio", "video") for p in m.content):
+                     has_audio_video = True
 
         for i, target in enumerate(candidates):
             client = self._clients.get(target)
             if not client:
                 continue
 
-            # Phase 4D: 如果是多模態且當前 Provider 不支援，則跳過 (除了 Gemini)
-            if msg_type == "multimodal" and target not in ["gemini"]:
-                 logger.warning(f"Provider {target} does not support native multimodal in this chain. Skipping.")
-                 continue
-                
+            # 多模態能力閘門 (Phase 1)：
+            # - audio/video payload 僅 gemini 可處理（claude 無 audio、local 未接線）
+            # - image payload 依 client 能力查詢（supports_vision）
+            if msg_type == "multimodal":
+                if has_audio_video:
+                    if target != "gemini":
+                        logger.warning(f"Provider {target} does not support audio/video payload. Skipping.")
+                        continue
+                elif not await client.supports_vision():
+                    logger.warning(f"Provider {target} does not support image payload. Skipping.")
+                    continue
+
             # 獲取 provider 專屬配置 (例如 model 覆蓋)
             provider_config = self._config.get("providers", {}).get(target, {})
             target_model = provider_config.get("model")
             target_thinking_budget = thinking_budget if thinking_budget is not None else provider_config.get("thinking_budget", -1)
-            target_max_tokens = provider_config.get("max_tokens", max_tokens)
+            # provider config 為上限；呼叫端明確指定時取兩者較小值（如貼圖感知收緊輸出）
+            config_max_tokens = provider_config.get("max_tokens")
+            if max_tokens is not None:
+                target_max_tokens = min(max_tokens, config_max_tokens) if config_max_tokens else max_tokens
+            else:
+                target_max_tokens = config_max_tokens or 4096
 
             if i > 0:
                 logger.warning(f"Fallback triggered: {candidates[0]} failed (likely Quota/429), trying {target}...")

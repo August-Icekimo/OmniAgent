@@ -76,4 +76,7 @@ class ClaudeClient(ModelClient):
         return self._model
 
     async def supports_vision(self) -> bool:
-        return True
+        # 模型本身支援 vision，但本 client 尚未實作內部 image block →
+        # Anthropic source 格式的轉換，原樣轉送會 400 — 在轉換完成前回報 False，
+        # 讓 router 能力閘門跳過，避免 image payload 白打一次 API。
+        return False
