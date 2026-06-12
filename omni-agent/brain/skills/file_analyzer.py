@@ -10,6 +10,10 @@ from .tgs_converter import tgs_to_png
 
 logger = logging.getLogger("brain.skills.file_analyzer")
 
+# 貼圖/GIF 感知輸出很短（一句話描述），收緊 max_tokens 抑制 Gemma 4 碎念
+# （gemma#622），也讓 local 最壞情況延遲受控（100 tok @ ~34 tok/s ≈ 3s）
+PERCEPTION_MAX_TOKENS = 100
+
 class FileAnalyzer:
     """提供 PDF、圖片、Excel 的分析功能。"""
 
@@ -185,6 +189,47 @@ class FileAnalyzer:
             logger.error(f"Voice analysis error: {e}")
             return f"語音處理失敗：{str(e)}"
 
+    async def _perceive_image(self, content: list, *, message_type: str, caller: str) -> str:
+        """貼圖/GIF 感知共用流程：規則路由（Phase 1 試點走 local）+ 升級保底。
+
+        local 回空或被 max_tokens 硬截時升級 gemini 重試一次，
+        比照 planner_node 的「空回應/截斷不出貨」防線。
+        """
+        decision = self.router.select_provider({"message_type": message_type})
+        logger.info(f"{caller}: routed to {decision['provider']} ({decision['reason']})")
+        response = await self.router.chat(
+            [Message(role=Role.USER, content=content)],
+            provider=decision["provider"],
+            max_tokens=PERCEPTION_MAX_TOKENS,
+            caller=caller,
+        )
+
+        content = response.content.strip()
+        finish = getattr(response, "finish_reason", "")
+        if content and finish == "length" and "\n" in content:
+            # Gemma 4 常在首行給出完整答案後接續碎念到被硬截（gemma#622）。
+            # 首行完整（其後有換行）即取首行出貨，不為碎念白白升級
+            first_line = content.split("\n", 1)[0].strip()
+            if first_line:
+                logger.info(
+                    f"{caller}: salvaged first line from truncated {response.provider} output"
+                )
+                return first_line
+
+        needs_escalation = not content or finish == "length"
+        if needs_escalation and response.provider != "gemini":
+            reason = "empty" if not content else "truncated"
+            logger.warning(
+                f"{caller}: provider {response.provider} returned {reason} content, escalating to gemini"
+            )
+            response = await self.router.chat(
+                [Message(role=Role.USER, content=content)],
+                provider="gemini",
+                max_tokens=PERCEPTION_MAX_TOKENS,
+                caller=f"{caller}_escalated",
+            )
+        return response.content
+
     async def _analyze_sticker(self, path: str, mime_type: str, _instruction: Optional[str], media_type: str) -> str:
         """貼圖語義分析。"""
         if media_type == "tgs_sticker":
@@ -205,13 +250,15 @@ class FileAnalyzer:
                 {"type": "text", "text": prompt}
             ]
 
-            response = await self.router.chat([Message(role=Role.USER, content=content)])
-            
+            result = await self._perceive_image(
+                content, message_type="sticker", caller="sticker_perception"
+            )
+
             # 清理 TGS 轉換產生的暫存 PNG
             if media_type == "tgs_sticker" and path.endswith(".png") and os.path.exists(path):
                 os.remove(path)
 
-            return response.content
+            return result
         except Exception as e:
             logger.error(f"Sticker analysis error: {e}")
             return "[sticker]"
@@ -246,8 +293,9 @@ class FileAnalyzer:
                 {"type": "text", "text": prompt}
             ]
 
-            response = await self.router.chat([Message(role=Role.USER, content=content)])
-            return response.content
+            return await self._perceive_image(
+                content, message_type="animation", caller="animation_perception"
+            )
         except Exception as e:
             logger.error(f"Animation analysis error: {e}")
             return f"動畫分析失敗：{str(e)}"
