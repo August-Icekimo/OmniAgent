@@ -48,6 +48,9 @@ services:
       - whisper-models:/root/.cache/huggingface
       - ./SOUL.md:/SOUL.md:ro
       - omni-workspace:/workspace
+      # 終端機 log 共享 volume：sandbox 寫、brain 讀（並負責 7 天保留期清理，
+      # 清理需刪檔故掛 rw；brain 為可信服務，rw 不增實質風險）
+      - terminal-logs:/terminal-logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,6 +59,8 @@ services:
       TZ: Asia/Taipei
       # 終端機技能：brain 透過此內網位址呼叫沙箱 exec 服務
       SANDBOX_URL: http://sandbox:8000
+      # 終端機 viewer：log 共享 volume 在 brain 容器內的掛載路徑
+      TERMINAL_LOG_DIR: /terminal-logs
 
   skills:
     build:
@@ -87,12 +92,16 @@ services:
     # 刻意不掛 .env（隔絕 secret，達成天然 env 刮除）。
     environment:
       TZ: Asia/Taipei
+      # 原始 ANSI log 落地根目錄（共享 volume，供 brain viewer 讀取）
+      LOG_ROOT: /sandbox/logs
     # 檔案系統唯讀，僅 /sandbox/work 與 tmpfs 可寫
     read_only: true
     tmpfs:
       - /tmp
     volumes:
       - sandbox-work:/sandbox/work
+      # 終端機 log 共享 volume：read_only 根 fs 不影響 volume 掛載點可寫
+      - terminal-logs:/sandbox/logs
     # 資源限制：防失控命令拖垮主機
     mem_limit: 512m
     pids_limit: 256
@@ -106,6 +115,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  terminal-logs:
   omni-workspace:
   sandbox-work:
   whisper-models:

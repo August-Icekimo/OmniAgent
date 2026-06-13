@@ -34,6 +34,32 @@ The system must manage temporary files in the shared workspace to prevent storag
 - **THEN** it must delete files that haven't been accessed for more than 120 hours
 - **AND** remove their corresponding entries from the `file_workspace_log` table.
 
+### Requirement: Terminal Execution Feedback & Web Log Viewer
+Terminal command output must not flood the chat channel. The brain must report only a concise summary plus a signed link to a web viewer that renders the full, ANSI-colored log, with real-time streaming for long-running commands.
+
+#### Scenario: Concise Chat Summary with Viewer Link
+- **WHEN** the `terminal` skill executes a command (foreground or background)
+- **THEN** the `reporter` node must produce a brief natural-language summary in Cindy's persona (not the raw output)
+- **AND** append a `[📄 查看完整終端機輸出]` link of the form `<CINDY_VIEWER_BASE_URL>/terminal/view/<task_id>?t=<token>`
+- **AND** record a `terminal_log:<task_id>` pointer (command, created_at, status) in `home_context`
+- **AND** if `CINDY_VIEWER_BASE_URL` or the signing secret is unset, degrade to summary-only (no broken link).
+
+#### Scenario: Authenticated, Token-Scoped Log Access
+- **WHEN** a user opens `GET /terminal/view/{task_id}`
+- **THEN** access is gated upstream by the secure-gateway Caddy `admin_policy` (Google OAuth)
+- **AND** the brain additionally verifies a short-lived HMAC token bound to `task_id` (default 24h)
+- **AND** invalid/expired/missing token → 403, unset secret → 503, unknown task_id → 404.
+
+#### Scenario: Real-Time Output Streaming
+- **WHEN** a client connects to `WS /terminal/ws/{task_id}` with a valid token
+- **THEN** the brain replays the existing log from the shared volume, then tails and pushes new raw bytes in real time
+- **AND** closes gracefully after the task reaches `done`/`error` per its `meta.json`.
+
+#### Scenario: Log Retention
+- **WHEN** the daily terminal-log cleanup task runs
+- **THEN** it must delete `<task_id>.log`/`.meta.json` older than `TERMINAL_LOG_RETENTION_DAYS` (default 7)
+- **AND** remove their corresponding `terminal_log:<task_id>` entries from `home_context`.
+
 ### Requirement: Attachment Routing
 The brain must prioritize file analysis when an attachment is present in the message.
 

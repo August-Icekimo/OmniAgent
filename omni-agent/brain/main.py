@@ -8,9 +8,13 @@ import traceback
 from datetime import datetime
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import asyncpg
+
+import terminal_logs
 
 from llm import Message, Role, create_default_router
 from soul.loader import SoulLoader
@@ -25,6 +29,22 @@ logging.basicConfig(
     format='{"time":"%(asctime)s","level":"%(levelname)s","module":"%(name)s","msg":"%(message)s"}',
 )
 logger = logging.getLogger("brain")
+
+
+_VIEWER_LINK_RE = re.compile(r"\[[^\]]*\]\((?:https?://)?[^)]*?/terminal/view/[^)]*\)")
+_VIEWER_URL_RE = re.compile(r"(?:https?://)?\S*/terminal/view/\S+")
+
+
+def _strip_viewer_links(text: str) -> str:
+    """存入對話歷史前移除終端機 viewer 連結，避免歷史汙染使模型學舌仿造假連結。
+
+    回給使用者的 reply_text 仍保留真連結；只有「寫進記憶的副本」被清掉連結。
+    """
+    if not text:
+        return text
+    text = _VIEWER_LINK_RE.sub("", text)
+    text = _VIEWER_URL_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def _media_placeholder(attachment: "AttachmentModel") -> str:
@@ -134,12 +154,43 @@ class BrainResponse(BaseModel):
     context_length: int = 0
 
 
+async def _terminal_log_cleanup_loop(app: FastAPI):
+    """終端機 log 保留期清理：啟動跑一次，之後每日重跑。
+
+    刪檔由 terminal_logs.prune_expired_files() 負責（容錯，單檔失敗不影響其他）；
+    對應的 home_context `terminal_log:<task_id>` 指標在此一併刪除（只有 brain 有 pool）。
+    """
+    interval = int(os.getenv("TERMINAL_LOG_CLEANUP_INTERVAL", str(24 * 3600)))
+    while True:
+        try:
+            pruned = terminal_logs.prune_expired_files()
+            pool = app.state.db_pool
+            if pruned and pool:
+                keys = [f"terminal_log:{tid}" for tid in pruned]
+                await pool.execute(
+                    "DELETE FROM home_context WHERE key = ANY($1::text[])", keys
+                )
+            if pruned:
+                logger.info(f"Terminal log cleanup pruned {len(pruned)} task(s)")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — 清理失敗不可拖垮服務
+            logger.warning(f"Terminal log cleanup failed: {e}")
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            raise
+
+
 # --- App Lifespan ---
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """啟動時初始化 ModelRouter、SoulLoader 與記憶模組。"""
     logger.info("Brain starting up...")
+
+    # 確保終端機 log 共享 volume 可由非 root 的 sandbox 寫入（排除初始化擁有權競態）
+    terminal_logs.ensure_log_dir_writable()
 
     # 預載 local STT 模型
     try:
@@ -193,7 +244,16 @@ async def lifespan(app: FastAPI):
         await start_proactive_tasks(app)
         logger.info("Proactive tasks started")
 
+    # 啟動終端機 log 保留期清理（啟動跑一次 + 每日重跑）
+    app.state.terminal_cleanup_task = asyncio.create_task(
+        _terminal_log_cleanup_loop(app)
+    )
+
     yield
+
+    task = getattr(app.state, "terminal_cleanup_task", None)
+    if task:
+        task.cancel()
 
     if app.state.db_pool:
         await app.state.db_pool.close()
@@ -202,10 +262,104 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Omni-Agent Brain", lifespan=lifespan)
 
+# 終端機 viewer 的 vendored xterm.js 靜態資產（路徑與 Caddy /terminal* 路由相符）
+if os.path.isdir(terminal_logs.STATIC_DIR):
+    app.mount(
+        "/terminal/static",
+        StaticFiles(directory=terminal_logs.STATIC_DIR),
+        name="terminal-static",
+    )
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "brain"}
+
+
+@app.get("/terminal/view/{task_id}")
+async def terminal_view(task_id: str, t: str | None = None):
+    """終端機 log 檢視頁（內嵌 xterm.js）。
+
+    門禁由 secure-gateway 的 Caddy admin_policy（Google OAuth）把關；
+    此處再驗短效 token 作縱深防禦。
+    """
+    if not terminal_logs.is_valid_task_id(task_id):
+        raise HTTPException(status_code=404, detail="找不到該終端機任務")
+    try:
+        if not terminal_logs.verify_view_token(task_id, t):
+            raise HTTPException(status_code=403, detail="連結已失效或無效")
+    except terminal_logs.TokenError as e:
+        # 金鑰未設定屬伺服器組態錯誤，明確報錯而非默默放行
+        raise HTTPException(status_code=503, detail=str(e))
+    if not terminal_logs.task_exists(task_id):
+        raise HTTPException(status_code=404, detail="找不到該終端機任務")
+    meta = terminal_logs.read_meta(task_id)
+    return HTMLResponse(terminal_logs.render_viewer_html(task_id, t, meta))
+
+
+@app.websocket("/terminal/ws/{task_id}")
+async def terminal_ws(ws: WebSocket, task_id: str, t: str | None = None):
+    """tail 共享 volume 的 log 檔，先回放既有內容再即時推送增量。
+
+    原始 bytes 以 binary frame 推送（xterm.js 自行解碼，跨 chunk 的多位元組字元
+    不會破碼）；狀態變化以 text JSON frame 推送。依 meta 的 status 判斷結束。
+    """
+    # 與 HTTP viewer 相同的驗證；失敗則在握手階段關閉（瀏覽器收到 onerror）
+    if not terminal_logs.is_valid_task_id(task_id):
+        await ws.close(code=1008)
+        return
+    try:
+        ok = terminal_logs.verify_view_token(task_id, t)
+    except terminal_logs.TokenError:
+        await ws.close(code=1011)  # 伺服器組態錯誤（金鑰未設定）
+        return
+    if not ok or not terminal_logs.task_exists(task_id):
+        await ws.close(code=1008)
+        return
+
+    await ws.accept()
+    path = terminal_logs.log_path(task_id)
+    offset = 0
+
+    def _read_from(off: int) -> bytes:
+        try:
+            with open(path, "rb") as f:
+                f.seek(off)
+                return f.read()
+        except OSError:
+            return b""
+
+    try:
+        meta = terminal_logs.read_meta(task_id) or {}
+        await ws.send_text(json.dumps({"status": meta.get("status", "pending")}))
+        while True:
+            data = _read_from(offset)
+            if data:
+                offset += len(data)
+                await ws.send_bytes(data)
+
+            meta = terminal_logs.read_meta(task_id) or {}
+            status = meta.get("status")
+            if status in ("done", "error"):
+                # sandbox 在 log 完整 flush 後才標記 done/error，故再讀一次必收完整
+                rest = _read_from(offset)
+                if rest:
+                    offset += len(rest)
+                    await ws.send_bytes(rest)
+                await ws.send_text(json.dumps(
+                    {"status": status, "exit_code": meta.get("exit_code")}))
+                break
+
+            await asyncio.sleep(0.3)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"terminal_ws error for {task_id}: {e}")
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 @app.post("/chat", response_model=BrainResponse)
@@ -355,10 +509,12 @@ async def chat(msg: StandardMessage):
         model_name = client.model_name() if client else "unknown"
 
         if pool and "upgrade_needed" not in reply_text:
-            # 舉旗 JSON 絕不入庫——歷史汙染會讓後續模型學舌輸出原始 JSON
+            # 舉旗 JSON 絕不入庫——歷史汙染會讓後續模型學舌輸出原始 JSON。
+            # 同理 viewer 連結也不入庫：否則模型會仿造假連結（甚至沿用舊網域如
+            # localhost），把 [📄...](…/terminal/view/…) 從歷史學去亂貼。
             round_messages = [
                 {"role": "user", "content": user_content},
-                {"role": "assistant", "content": reply_text}
+                {"role": "assistant", "content": _strip_viewer_links(reply_text)}
             ]
             metadata = {
                 "model": model_name,
@@ -469,7 +625,7 @@ async def auto_confirm_model_upgrade(app, orig_msg: StandardMessage, state: dict
                 }
                 round_messages = [
                     {"role": "user", "content": orig_msg.text or ""},
-                    {"role": "assistant", "content": reply_text}
+                    {"role": "assistant", "content": _strip_viewer_links(reply_text)}
                 ]
                 asyncio.create_task(app.state.short_term.save(user_id, orig_msg.platform, round_messages, metadata))
             
