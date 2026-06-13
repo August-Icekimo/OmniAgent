@@ -2,9 +2,9 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# 安裝系統依賴（asyncpg 需要）
+# 安裝系統依賴（asyncpg 需 build-essential，faster-whisper 需 ffmpeg 等）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+    build-essential ffmpeg \
     libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
     && rm -rf /var/lib/apt/lists/*
 

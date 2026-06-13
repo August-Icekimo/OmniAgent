@@ -3,6 +3,7 @@ import hashlib
 import logging
 import os
 import json
+import re
 import traceback
 from datetime import datetime
 
@@ -52,6 +53,63 @@ class AttachmentModel(BaseModel):
     media_type: str | None = None
     duration_ms: int | None = None
 
+async def _save_voice_transcript(pool, user_id, platform, source_msg_id, transcript, path, duration_ms):
+    if not pool or not user_id:
+        return
+    import uuid
+    try:
+        uid = uuid.UUID(user_id)
+    except (ValueError, TypeError):
+        return
+    try:
+        await pool.execute(
+            """
+            INSERT INTO voice_transcripts (user_id, source_platform, source_message_id, transcript, audio_path, duration_ms)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            uid, platform, source_msg_id or "unknown", transcript, path, duration_ms
+        )
+    except Exception as e:
+        logger.error(f"Failed to store voice transcript: {e}")
+
+# whisper 對非語音段會吐出標註 token（如 [音樂]/[BLANK_AUDIO]），
+# 也會把真實語音整段包進方括號（實測 [今天的天氣很]）。
+# 策略：先整段移除已知非語音標註，再把殘留的成對括號去殼、保留內文。
+_NON_SPEECH_TOKEN = re.compile(
+    r"[\[\(【（]\s*"
+    r"(?:blank_audio|no\s*audio|silence|inaudible|音樂|音乐|掌聲|掌声|"
+    r"笑聲|笑声|噪音|雜音|杂音|無聲|无声|無語音|静音)"
+    r"\s*[\]\)】）]",
+    re.IGNORECASE,
+)
+_BRACKET_CHARS = str.maketrans("", "", "[]()【】（）")
+
+def _clean_transcript(text: str) -> str:
+    text = _NON_SPEECH_TOKEN.sub("", text)
+    text = text.translate(_BRACKET_CHARS)
+    return re.sub(r"\s+", " ", text).strip()
+
+async def _transcribe_voice_local(attachment: AttachmentModel, model) -> dict:
+    try:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        
+        def _do_transcribe():
+            segments, info = model.transcribe(
+                attachment.local_path,
+                language="zh",
+                initial_prompt="以下是繁體中文語音訊息的逐字稿。",
+                beam_size=5,
+            )
+            return _clean_transcript(" ".join([segment.text for segment in segments]))
+            
+        transcript = await loop.run_in_executor(None, _do_transcribe)
+        if transcript:
+            return {"success": True, "transcript": transcript}
+        return {"success": False, "error": "Empty transcript"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 class StandardMessage(BaseModel):
     """與 Gateway 的 StandardMessage{} 對齊。"""
     id: str
@@ -82,6 +140,15 @@ class BrainResponse(BaseModel):
 async def lifespan(app: FastAPI):
     """啟動時初始化 ModelRouter、SoulLoader 與記憶模組。"""
     logger.info("Brain starting up...")
+
+    # 預載 local STT 模型
+    try:
+        from faster_whisper import WhisperModel
+        app.state.stt_model = WhisperModel("small", device="cpu", compute_type="int8")
+        logger.info("Local STT model loaded (faster-whisper small)")
+    except Exception as e:
+        logger.error(f"Failed to load local STT model: {e}")
+        app.state.stt_model = None
 
     # 初始化 ModelRouter
     router = create_default_router()
@@ -157,6 +224,27 @@ async def chat(msg: StandardMessage):
     confirmation_received = False
     pending_plan = None
     manual_selected_provider = None
+
+    # 0.5. 處理語音 STT
+    stt_echo = ""
+    if msg.message_type == "voice" and msg.attachment and getattr(app.state, "stt_model", None):
+        stt_result = await _transcribe_voice_local(msg.attachment, app.state.stt_model)
+        if stt_result.get("success"):
+            # STT 成功：消費 attachment，文字注入 msg.text
+            msg.text = stt_result["transcript"]
+            stt_echo = f"\n\n(🎙️ 聽寫：{msg.text})"
+            
+            # 非同步寫入紀錄
+            asyncio.create_task(_save_voice_transcript(
+                pool, msg.user_id, msg.platform, msg.source_message_id,
+                msg.text, msg.attachment.local_path, msg.attachment.duration_ms
+            ))
+            
+            msg.attachment = None
+            msg.message_type = "text"
+            logger.info(f"Local STT successful: {msg.text}")
+        else:
+            logger.warning(f"Local STT failed: {stt_result.get('error')}, falling back to Gemini")
 
     # 1. 處理特殊狀態：模型升級確認 (僅限 Admin)
     # 此處簡化：假設所有進來的 UserID 都已在 Gateway 驗證過
@@ -315,7 +403,7 @@ async def chat(msg: StandardMessage):
         context_tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
 
         return BrainResponse(
-            reply_text=reply_text,
+            reply_text=reply_text + stt_echo,
             model_used=model_name,
             provider=provider_name,
             routing_reason=final_state.get("routing_reason"),

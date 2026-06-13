@@ -41,3 +41,12 @@ The brain must prioritize file analysis when an attachment is present in the mes
 - **WHEN** a `StandardMessage` contains an `attachment`
 - **THEN** the `planner` node must automatically select the `file_analyze` skill
 - **AND** skip the confirmation node (as it is a read-only operation).
+
+### Requirement: Local Speech-to-Text Preprocessing
+The system must optimize voice message processing by transcribing audio locally before passing it to the graph.
+
+#### Scenario: Preprocessing Voice Attachment
+- **WHEN** a `StandardMessage` with `message_type: "voice"` is received
+- **THEN** the system must use a local CPU-based STT engine (e.g., faster-whisper) to transcribe the audio
+- **AND** if successful, inject the transcribed text into the message text, consume the attachment, and route it as a standard text message.
+- **AND** if it fails, fallback to passing the raw audio attachment to the graph for multimodal LLM processing.

@@ -45,6 +45,7 @@ services:
     ports:
       - "${BRAIN_PORT:-8000}:8000"
     volumes:
+      - whisper-models:/root/.cache/huggingface
       - ./SOUL.md:/SOUL.md:ro
       - omni-workspace:/workspace
     depends_on:
@@ -104,3 +105,4 @@ services:
 volumes:
   omni-workspace:
   sandbox-work:
+  whisper-models:
