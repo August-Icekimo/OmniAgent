@@ -140,3 +140,4 @@ provider override 或呼叫端設定）。
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-06-12 | Initial proposal |
+| 1.1 | 2026-06-12 | 實機貼圖測試後修復三個 server/路由問題：(1) chrysoberyl `--prefill-step-size 8192`（MLLM scheduler prefill 上限 2048 使 planner 長 prompt 全滅）；(2) patch rapid-mlx `_get_stop_tokens()` 合併 model config eos ids（Gemma 4 `<turn|>`=106 不在 tokenizer eos，MLLM 模式永不停步）；(3) planner attachment 分支貼圖/GIF 的 `selected_provider` 改走規則路由，reporter 回覆組稿與 footer 誠實反映 local |
