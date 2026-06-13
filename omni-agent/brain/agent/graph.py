@@ -404,7 +404,8 @@ async def executor_node(state: AgentState):
         skill = get_terminal_skill()
         params = plan.get("params") or {}
         command = str(params.get("command") or "").strip()
-        if not command:
+        is_poll = bool(params.get("task_id"))
+        if not command and not is_poll:
             return {"skill_result": {"success": False, "error": "缺少命令 command"}}
         result = await skill.execute(
             command,
@@ -412,6 +413,8 @@ async def executor_node(state: AgentState):
             background=bool(params.get("background", False)),
             task_id=params.get("task_id"),
         )
+        # home_context 指標：task_id → log 指標（供回溯與 7 天保留期清理）
+        await _record_terminal_pointer(state, params, command, result)
         return {"skill_result": result}
 
     skills_url = os.getenv("SKILLS_URL")
@@ -434,6 +437,49 @@ async def executor_node(state: AgentState):
     except Exception as e:
         logger.error(f"Skill execution failed: {e}")
         return {"skill_result": {"status": "error", "error": str(e)}}
+
+async def _record_terminal_pointer(state, params, command, result):
+    """在 home_context 寫/更新 `terminal_log:<task_id>` 指標。
+
+    啟動（前景/背景）時寫完整指標（含 command、created_at、status）；
+    狀態輪詢時只合併更新 status，保留原 command。寫入失敗不影響執行結果。
+    """
+    data = result.get("data") or {}
+    task_id = data.get("task_id") or params.get("task_id")
+    if not task_id:
+        return
+    pool = getattr(state["model_router"], "_db_pool", None)
+    if not pool:
+        return
+    is_poll = bool(params.get("task_id"))
+    try:
+        if is_poll:
+            status = data.get("status") or "running"
+            await pool.execute(
+                "UPDATE home_context SET value = value || $2::jsonb, updated_at = NOW() "
+                "WHERE key = $1",
+                f"terminal_log:{task_id}",
+                json.dumps({"status": status}),
+            )
+        else:
+            if params.get("background"):
+                status = "running"
+            else:
+                status = "done" if result.get("success") else "error"
+            await pool.execute(
+                "INSERT INTO home_context (key, value) VALUES ($1, $2) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+                f"terminal_log:{task_id}",
+                json.dumps({
+                    "task_id": task_id,
+                    "command": command,
+                    "status": status,
+                    "created_at": time.time(),
+                }),
+            )
+    except Exception as e:  # noqa: BLE001 — 指標寫入是附帶效果，不可拖垮主流程
+        logger.warning(f"record terminal pointer failed: {e}")
+
 
 async def reporter_node(state: AgentState):
     """REPORT 節點：將結果轉換為自然語言。"""
@@ -501,11 +547,54 @@ async def reporter_node(state: AgentState):
         )
         return {"final_reply": response.content, "last_usage": response.usage}
 
+    # --- terminal: 聊天只回精簡摘要 + viewer 連結，完整輸出交給 web viewer ---
+    if plan and plan.get("skill") == "terminal":
+        import terminal_logs
+        params = plan.get("params") or {}
+        data = result.get("data") or {}
+        task_id = data.get("task_id") or params.get("task_id")
+        is_poll = bool(params.get("task_id"))
+        is_background = bool(params.get("background"))
+
+        if not result.get("success"):
+            err = result.get("error", "未知錯誤")
+            report_prompt = (
+                f"終端機命令執行失敗，原因：{err}。"
+                "請用 Cindy 的語氣簡短、誠實地說明，不要編造輸出，不要輸出 JSON。"
+            )
+        elif is_background and not is_poll:
+            report_prompt = (
+                "終端機命令已在背景啟動。請用 Cindy 的語氣簡短說「已經開始執行、"
+                "稍後可以點下面的連結查看即時進度」，一兩句即可，不要輸出 JSON。"
+            )
+        else:
+            exit_code = data.get("exit_code")
+            preview = (data.get("output") or "")[:800]
+            status_note = "" if is_poll else f"（exit code {exit_code}）"
+            report_prompt = (
+                f"終端機命令已執行完畢{status_note}。以下是輸出開頭片段，"
+                "請用 Cindy 的語氣給「一句話」精簡結論（例如成功與否、關鍵數字），"
+                "不要貼整段原始輸出、不要輸出 JSON：\n---\n"
+                f"{preview}\n---"
+            )
+
+        response = await router.chat(
+            state["messages"],
+            system_prompt=state["system_prompt"] + "\n\n" + report_prompt,
+            provider=state.get("selected_provider"),
+            caller="reporter_node_terminal",
+        )
+        reply = response.content or "命令處理完成。"
+        link = terminal_logs.build_view_url(task_id) if task_id else None
+        if link:
+            reply = f"{reply}\n\n[📄 查看完整終端機輸出]({link})"
+        return {"final_reply": reply, "last_usage": response.usage}
+
     report_prompt = f"""
     ## Skill Result
     Skill: {plan.get('skill', 'unknown')}
     Result: {json.dumps(result)}
-    
+
     以 Cindy 的語氣，向用戶報告執行結果。如果成功，用溫暖的方式分享；如果失敗，誠實說明原因。不要輸出 JSON。
     """
     
