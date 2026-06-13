@@ -5,7 +5,6 @@ import os
 import json
 import re
 import traceback
-from datetime import datetime
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -376,8 +375,8 @@ async def chat(msg: StandardMessage):
     
     # 0. 狀態預設值
     confirmation_received = False
-    pending_plan = None
-    manual_selected_provider = None
+    resume_messages = None          # 確認後恢復執行的對話（含待批准的 tool_calls）
+    resume_iterations = 0
 
     # 0.5. 處理語音 STT
     stt_echo = ""
@@ -415,25 +414,16 @@ async def chat(msg: StandardMessage):
                     model_used=target_model, provider="escalated"
                 )
 
-    # 2. 處理特殊狀態：技能確認回覆 或 模型升級確認回覆
+    # 2. 技能確認回覆：使用者同意後，恢復執行先前暫停的 tool_calls
     if pool:
-        # 技能確認
         pending_check = await pool.fetchrow("SELECT value FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
         if pending_check:
             if any(word in msg.text.lower() for word in ["好", "可以", "確認", "yes", "go"]):
                 confirmation_received = True
-                pending_plan = json.loads(pending_check['value'])
+                pdata = json.loads(pending_check['value'])
+                resume_messages = pdata.get("messages")
+                resume_iterations = pdata.get("tool_iterations", 0)
             await pool.execute("DELETE FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
-            
-        # 模型升級確認 (Phase 4A)
-        upgrade_check = await pool.fetchrow("SELECT value FROM home_context WHERE key = $1", f"model_upgrade:pending:{msg.user_id}")
-        if upgrade_check:
-            upgrade_data = json.loads(upgrade_check['value'])
-            if any(word in msg.text.lower() for word in ["好", "可以", "升級", "yes", "ok"]):
-                confirmation_received = True
-                manual_selected_provider = upgrade_data.get("target_provider")
-                logger.info(f"User confirmed model upgrade to {manual_selected_provider}")
-            await pool.execute("DELETE FROM home_context WHERE key = $1", f"model_upgrade:pending:{msg.user_id}")
 
     # 3. SoulLoader 渲染 system prompt
     try:
@@ -471,22 +461,28 @@ async def chat(msg: StandardMessage):
     llm_messages.append(Message(role=Role.USER, content=user_content))
 
     # 6. 執行 LangGraph
+    # 確認往返恢復：用先前存下的對話（含待批准的 tool_calls）取代本輪訊息，
+    # 並設 resume_tools 讓 planner 直接進工具節點執行已批准的 tool_calls。
+    resume_tools = bool(resume_messages and confirmation_received)
+    if resume_tools:
+        from agent.graph import deserialize_messages
+        graph_messages = deserialize_messages(resume_messages)
+    else:
+        graph_messages = llm_messages
+
     state = {
         "user_id": msg.user_id,
         "source_message_id": msg.source_message_id,
         "platform": msg.platform,
-        "messages": llm_messages,
+        "messages": graph_messages,
         "system_prompt": system_prompt,
         "model_router": router,
-        "selected_provider": manual_selected_provider,
-        "routing_reason": f"manual:confirmed" if manual_selected_provider else None,
-        "complexity": None,
-        "complexity_reason": None,
-        "upgrade_requested": False,
+        "selected_provider": None,
+        "routing_reason": None,
         "attachment": msg.attachment.model_dump() if msg.attachment else None,
-        # 確認往返：帶回 pending plan 與確認狀態（planner 偵測到已有 plan 會跳過重新規劃）
-        "plan": pending_plan,
         "confirmation_received": confirmation_received,
+        "resume_tools": resume_tools,
+        "tool_iterations": resume_iterations,
     }
 
     try:
@@ -524,35 +520,14 @@ async def chat(msg: StandardMessage):
             asyncio.create_task(short_term.save(msg.user_id, msg.platform, round_messages, metadata))
             asyncio.create_task(long_term.store(msg.user_id, round_messages))
 
-        # 9. 處理 Phase 4A 升級確認 (F-06 Auto-confirm)
-        if pool and final_state.get("upgrade_requested") and final_state.get("final_reply"):
-            # 存入 pending 狀態
-            await pool.execute(
-                "INSERT INTO home_context (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                f"model_upgrade:pending:{msg.user_id}",
-                json.dumps({
-                    "start_time": datetime.now().isoformat(),
-                    "target_provider": final_state.get("selected_provider"), # 注意：規劃時已決定好
-                    "messages": [m.__dict__ for m in final_state["messages"]]
-                })
-            )
-            # 啟動 15s 自動確認任務
-            asyncio.create_task(auto_confirm_model_upgrade(app, msg, final_state))
-
-        # 9b. 技能確認往返：confirmer_node 回了確認問句但尚未執行時，存下 pending plan，
-        # 下一則訊息若同意（main.py 開頭的 confirm:pending 檢查）即帶回 plan 直接執行。
-        final_plan = final_state.get("plan")
-        if (
-            pool
-            and final_plan
-            and final_plan.get("is_write")
-            and not confirmation_received
-            and not final_state.get("skill_result")  # 尚未執行才需確認
-        ):
+        # 9. 寫入型工具確認往返：tools_node 暫停並回了確認問句時，存下待恢復的
+        # 對話（含待批准的 tool_calls）；下一則訊息若同意即恢復執行（見開頭 confirm:pending）。
+        pending_tools = final_state.get("pending_tools")
+        if pool and pending_tools:
             await pool.execute(
                 "INSERT INTO home_context (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
                 f"confirm:pending:{msg.user_id}",
-                json.dumps(final_plan),
+                json.dumps(pending_tools),
             )
 
         usage = final_state.get("last_usage") or {}
@@ -571,63 +546,3 @@ async def chat(msg: StandardMessage):
         logger.error(f"Agent graph execution failed: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=502, detail=f"Agent error: {e}")
-async def auto_confirm_model_upgrade(app, orig_msg: StandardMessage, state: dict):
-    """15秒自動確認升級背景任務。"""
-    user_id = orig_msg.user_id
-    pool = app.state.db_pool
-    
-    await asyncio.sleep(15)
-    
-    # 檢查是否還在 pending
-    if pool:
-        row = await pool.fetchrow("SELECT value FROM home_context WHERE key = $1", f"model_upgrade:pending:{user_id}")
-        if not row:
-            logger.info(f"Auto-confirm skipped for user {user_id}: no pending upgrade")
-            return
-            
-        # 執行升級！
-        logger.info(f"Auto-confirming model upgrade for user {user_id}")
-        await pool.execute("DELETE FROM home_context WHERE key = $1", f"model_upgrade:pending:{user_id}")
-        
-        # 重新執行 LangGraph
-        state["upgrade_requested"] = False
-        state["confirmation_received"] = True
-        # 注意：selected_provider 已經在 planner_node 決定好了
-        
-        try:
-            final_state = await app.state.graph.ainvoke(state)
-            reply_text = final_state.get("final_reply", "執行完成（自動升級）。")
-            
-            # 推送訊息給使用者 (透過 Telegram Bot API)
-            bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-            admin_chats = await pool.fetch("SELECT chat_id FROM telegram_accounts WHERE user_id = (SELECT id FROM users WHERE id = $1)", user_id)
-            
-            # 如果是 Telegram
-            if orig_msg.platform == "telegram" and bot_token:
-                import httpx
-                async with httpx.AsyncClient() as client:
-                    target_chat = orig_msg.id # Telegram 裡 id 可能是 chat_id 或 msg_id，這裡需確認整合方式
-                    # 為簡化，使用原本訊息傳來的 user_id 關聯的 chat_id
-                    chat_row = await pool.fetchrow("SELECT chat_id FROM telegram_accounts WHERE user_id = $1::uuid", user_id)
-                    if chat_row:
-                        await client.post(
-                            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                            json={"chat_id": chat_row['chat_id'], "text": reply_text}
-                        )
-            
-            # TODO: 支援 LINE 及其它平台
-            # 儲存對話 (含 Metadata)，比照 /chat 主流程：舉旗 JSON 不入庫
-            if "upgrade_needed" not in reply_text:
-                metadata = {
-                    "model": final_state.get("selected_provider"),
-                    "provider": final_state.get("selected_provider"),
-                    "routing_reason": "auto_confirm"
-                }
-                round_messages = [
-                    {"role": "user", "content": orig_msg.text or ""},
-                    {"role": "assistant", "content": _strip_viewer_links(reply_text)}
-                ]
-                asyncio.create_task(app.state.short_term.save(user_id, orig_msg.platform, round_messages, metadata))
-            
-        except Exception as e:
-            logger.error(f"Auto-confirm execution failed: {e}")
