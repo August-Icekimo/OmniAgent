@@ -289,7 +289,8 @@ async def agent_node(state: AgentState):
 
     iterations = state.get("tool_iterations", 0)
     if response.tool_calls and iterations < MAX_TOOL_ITERATIONS:
-        logger.info(f"agent_node: {len(response.tool_calls)} tool_call(s), iter={iterations}")
+        logger.info("agent_node: tool_calls=%s iter=%d",
+                    [(tc.name, tc.arguments) for tc in response.tool_calls], iterations)
         return out  # route_after_agent → tools
 
     # 最終回覆
@@ -335,6 +336,7 @@ async def tools_node(state: AgentState):
                 return out
             danger = is_dangerous(command)
             if danger:
+                logger.warning("tools_node BLOCKED dangerous terminal command (%s): %r", danger, command)
                 out["messages"] = messages
                 out["final_reply"] = f"這個命令太危險了（{danger}），我不能幫你跑。"
                 return out
