@@ -200,8 +200,21 @@ vendored xterm.js 的輕量 HTML 頁，渲染該 task 的 log（含 ANSI 色彩�
 
 ---
 
+## Verification（實機驗證 2026-06-13）
+
+於 podman compose 實機（rebuild sandbox+brain、重建 volume）驗證通過：
+
+- ✅ sandbox `/exec` 落地 `<task_id>.log`/`.meta.json` 至共享 volume，ANSI 保留、stderr 併入、meta status/exit_code 正確；檔案在 brain 容器內可見。
+- ✅ `GET /terminal/view/{id}`：有效 token→200（HTML 含正確 task_id/ws path/xterm.css）、無/壞 token→403、未知 task→404、`/terminal/static/xterm.js`→200（289KB vendored）。
+- ✅ `WS /terminal/ws/{id}`：完成任務全量回放 + done 狀態幀；背景長命令**即時逐步串流**（running→輸出→done）；壞 token 握手即拒。
+- ✅ `home_context` 指標：`_record_terminal_pointer` 寫入 command/created_at/status，輪詢以 JSONB `||` 合併更新 status。
+- ✅ 保留期清理：meta 改 8 天前 → prune 刪 log+meta、`DELETE ... WHERE key=ANY()` 刪 `home_context` 列。
+- 🐛 **驗證發現並修正**：terminal-logs named volume 初始化為 root 擁有，非 root（uid 10001）sandbox 寫 log 被拒（`/exec` 假性成功但無檔）。修正：sandbox Dockerfile 預建 `/sandbox/logs` 並 chown；brain 開機 `ensure_log_dir_writable()` chown 排除競態。（commit `62d9c94`）
+- ⚠️ **仍未驗證**：完整 `/chat` LLM 鏈路（planner→terminal→reporter 出稿）需 admin user + LLM；Caddy OAuth→brain 對外鏈路（secure-gateway 外部相依）；手機瀏覽器實際渲染。
+
 ## Revision History
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-06-13 | Initial proposal |
 | 1.1 | 2026-06-13 | 定案 token 壽命 24h、viewer 複用 `cindy.` subdomain |
+| 1.2 | 2026-06-13 | 實機驗證通過；修正共享 volume 非 root 寫入權限（commit 62d9c94） |
