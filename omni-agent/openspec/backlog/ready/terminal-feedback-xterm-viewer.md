@@ -1,6 +1,6 @@
 ---
 slug: terminal-feedback-xterm-viewer
-status: ready
+status: in-sprint
 domain: brain
 size: M
 priority: P1
