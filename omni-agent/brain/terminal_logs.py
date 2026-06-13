@@ -31,12 +31,35 @@ TOKEN_TTL_SECONDS = int(os.getenv("TERMINAL_VIEW_TOKEN_TTL", str(24 * 3600)))
 # log 保留天數，預設 7 天
 RETENTION_DAYS = int(os.getenv("TERMINAL_LOG_RETENTION_DAYS", "7"))
 
+# 共享 volume 的目標擁有者：sandbox 容器以此 uid/gid 非 root 執行，需能寫入 log。
+# brain（root）開機時把目錄 chown 成此擁有者，排除 named volume 初始化擁有權競態。
+LOG_DIR_OWNER_UID = int(os.getenv("TERMINAL_LOG_UID", "10001"))
+LOG_DIR_OWNER_GID = int(os.getenv("TERMINAL_LOG_GID", "10001"))
+
 # task_id 來自 URL，嚴格白名單避免路徑穿越（sandbox 產生的是 12 位 hex）
 _VALID_TASK_ID = re.compile(r"^[A-Za-z0-9]{1,64}$")
 
 
 class TokenError(Exception):
     """金鑰未設定等組態錯誤；端點據此回 5xx，而非默默放行或回 403。"""
+
+
+def ensure_log_dir_writable() -> None:
+    """brain（root）開機時呼叫：建立共享 log 目錄並 chown 給 sandbox 擁有者。
+
+    解決 named volume 首次初始化擁有權競態——若 brain 先掛載，volume 會是 root
+    擁有，非 root 的 sandbox 將無法寫入 log。brain 是 root，chown 必成功；非 root
+    環境下 chown 失敗只記 warning，不影響 brain 自身運作。
+    """
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+    except OSError as e:
+        logger.warning(f"無法建立 log 目錄 {LOG_DIR}: {e}")
+        return
+    try:
+        os.chown(LOG_DIR, LOG_DIR_OWNER_UID, LOG_DIR_OWNER_GID)
+    except (OSError, PermissionError) as e:
+        logger.warning(f"chown {LOG_DIR} → {LOG_DIR_OWNER_UID}:{LOG_DIR_OWNER_GID} 失敗：{e}")
 
 
 def _secret() -> bytes:

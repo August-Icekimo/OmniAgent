@@ -173,6 +173,9 @@ async def lifespan(app: FastAPI):
     """啟動時初始化 ModelRouter、SoulLoader 與記憶模組。"""
     logger.info("Brain starting up...")
 
+    # 確保終端機 log 共享 volume 可由非 root 的 sandbox 寫入（排除初始化擁有權競態）
+    terminal_logs.ensure_log_dir_writable()
+
     # 預載 local STT 模型
     try:
         from faster_whisper import WhisperModel
