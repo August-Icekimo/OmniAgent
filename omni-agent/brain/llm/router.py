@@ -226,9 +226,14 @@ class ModelRouter:
         max_tokens: int | None = None,
         provider: str | None = None,
         thinking_budget: int | None = None,
+        tools: list | None = None,
+        tool_choice: str = "auto",
         caller: str = "unknown"
     ) -> LLMResponse:
-        """主入口：根據配置和 fallback 鏈選擇合適的 provider。"""
+        """主入口：根據配置和 fallback 鏈選擇合適的 provider。
+
+        傳入 `tools` 時啟用 provider-native function calling，回應可能含
+        `tool_calls`（見 LLMResponse）。"""
         logger.info(f"Router.chat called by {caller}")
         
         # 1. 決定候選名單
@@ -296,6 +301,8 @@ class ModelRouter:
                         temperature=temperature,
                         max_tokens=target_max_tokens,
                         thinking_budget=target_thinking_budget,
+                        tools=tools,
+                        tool_choice=tool_choice,
                         model=target_model
                     )
                 except TypeError:
@@ -304,7 +311,9 @@ class ModelRouter:
                         messages,
                         system_prompt=system_prompt,
                         temperature=temperature,
-                        max_tokens=target_max_tokens
+                        max_tokens=target_max_tokens,
+                        tools=tools,
+                        tool_choice=tool_choice,
                     )
                 
                 # 如果是退路觸發的，加上思考表情符號

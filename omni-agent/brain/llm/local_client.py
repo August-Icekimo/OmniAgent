@@ -9,12 +9,13 @@ thinking_budget > 0 才啟用 enable_thinking；預設關閉。
 """
 
 import base64
+import json
 import logging
 import os
 import re
 
 from openai import AsyncOpenAI
-from .base import ModelClient, Message, LLMResponse
+from .base import ModelClient, Message, LLMResponse, Role, ToolCall, ToolSpec
 
 logger = logging.getLogger("brain.llm.local")
 
@@ -81,6 +82,45 @@ def _clean_output(text: str) -> str:
     return cleaned
 
 
+def _tools_to_openai(tools: list[ToolSpec] | None):
+    """內部 ToolSpec → OpenAI tools 格式。"""
+    if not tools:
+        return None
+    return [
+        {"type": "function", "function": {
+            "name": t.name, "description": t.description, "parameters": t.parameters}}
+        for t in tools
+    ]
+
+
+def _oai_message(m: Message) -> dict:
+    """內部 Message → OpenAI chat message，含 tool_calls / tool-result 回合。"""
+    if m.role == Role.TOOL:
+        return {"role": "tool", "tool_call_id": m.tool_call_id, "content": m.content or ""}
+    msg: dict = {"role": m.role.value, "content": _to_openai_content(m.content)}
+    if m.tool_calls:
+        msg["tool_calls"] = [
+            {"id": tc.id, "type": "function",
+             "function": {"name": tc.name, "arguments": json.dumps(tc.arguments, ensure_ascii=False)}}
+            for tc in m.tool_calls
+        ]
+    return msg
+
+
+def _parse_tool_calls(message) -> list[ToolCall]:
+    """OpenAI 回傳的 tool_calls → 統一 ToolCall（arguments 解析成 dict，容錯）。"""
+    out = []
+    for tc in (getattr(message, "tool_calls", None) or []):
+        raw = tc.function.arguments or "{}"
+        try:
+            args = json.loads(raw)
+        except (ValueError, TypeError):
+            logger.warning("tool_call arguments 非合法 JSON: %r", raw)
+            args = {}
+        out.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+    return out
+
+
 class LocalClient(ModelClient):
     """本地 MLX 客戶端，透過 OpenAI-compatible API 連接 chrysoberyl。"""
 
@@ -109,30 +149,37 @@ class LocalClient(ModelClient):
         temperature: float = 0.7,
         max_tokens: int = 512,
         thinking_budget: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str = "auto",
         model: str | None = None,
     ) -> LLMResponse:
         oai_messages = []
         if system_prompt:
             oai_messages.append({"role": "system", "content": system_prompt})
         for m in messages:
-            oai_messages.append({
-                "role": m.role.value,
-                "content": _to_openai_content(m.content),
-            })
+            oai_messages.append(_oai_message(m))
 
         effective_budget = thinking_budget if thinking_budget is not None else self._thinking_budget
         # Always send enable_thinking explicitly — Gemma 4 defaults to thinking=on via chat template,
         # which causes message.content to be empty (mlx-lm issue #1352).
         extra = {"enable_thinking": effective_budget > 0}
 
-        response = await self._client.chat.completions.create(
+        kwargs = dict(
             model=model or self._model,
             messages=oai_messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            stop=_STOP_SEQUENCES,
             extra_body=extra,
         )
+        oai_tools = _tools_to_openai(tools)
+        if oai_tools:
+            kwargs["tools"] = oai_tools
+            kwargs["tool_choice"] = tool_choice
+        else:
+            # stop 序列只在純文字生成時套用；tool calling 模式不需要、避免干擾
+            kwargs["stop"] = _STOP_SEQUENCES
+
+        response = await self._client.chat.completions.create(**kwargs)
 
         choice = response.choices[0]
         usage = {}
@@ -142,9 +189,11 @@ class LocalClient(ModelClient):
                 "output_tokens": response.usage.completion_tokens,
             }
 
+        tool_calls = _parse_tool_calls(choice.message)
         raw_content = choice.message.content or ""
-        content = _clean_output(raw_content)
-        if content != raw_content:
+        # 有 tool_calls 時 content 通常為空，且不需 thought 清理
+        content = raw_content if tool_calls else _clean_output(raw_content)
+        if not tool_calls and content != raw_content:
             logger.info(
                 "Local output cleaned: %d -> %d chars (finish_reason=%s)",
                 len(raw_content), len(content), choice.finish_reason,
@@ -157,6 +206,7 @@ class LocalClient(ModelClient):
             usage=usage,
             cached=False,  # 本地模型無 cache 機制
             finish_reason=choice.finish_reason or "",
+            tool_calls=tool_calls,
         )
 
     def provider_name(self) -> str:
