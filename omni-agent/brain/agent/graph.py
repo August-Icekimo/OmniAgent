@@ -118,14 +118,27 @@ async def planner_node(state: AgentState):
             logger.info("Attachment detected, routing to file_analyze")
             timer.executor_chosen = "attachment_routing"
             timer.is_complete = True
+
+            # 貼圖/GIF 試點：回覆組稿（reporter 感知路徑）也依規則路由（local 短快），
+            # footer 才能誠實反映實際出力的 provider。其餘附件類型維持 None（gemini 預設）
+            selected_provider = None  # 讓 router 決定最好的 (OAuth 優先)
+            routing_reason = "attachment_routing"
+            media_type = state["attachment"].get("media_type") or "file"
+            if media_type in ("sticker", "tgs_sticker", "animation"):
+                normalized = "sticker" if media_type == "tgs_sticker" else media_type
+                decision = router.select_provider({"message_type": normalized})
+                selected_provider = decision["provider"]
+                routing_reason = f"attachment_routing+{decision['reason']}"
+                timer.executor_chosen = selected_provider
+
             return {
                 "plan": {
                     "skill": "file_analyze",
                     "is_write": False,
                     "summary": f"分析檔案：{state['attachment']['file_name']}"
                 },
-                "selected_provider": None, # 讓 router 決定最好的 (OAuth 優先)
-                "routing_reason": "attachment_routing"
+                "selected_provider": selected_provider,
+                "routing_reason": routing_reason
             }
 
         # 如果已經有 plan (例如從 pending confirmation 載入)，跳過重新規劃
