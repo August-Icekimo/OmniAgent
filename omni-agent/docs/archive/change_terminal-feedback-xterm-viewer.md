@@ -221,3 +221,4 @@ vendored xterm.js 的輕量 HTML 頁，渲染該 task 的 log（含 ANSI 色彩�
 | 1.0 | 2026-06-13 | Initial proposal |
 | 1.1 | 2026-06-13 | 定案 token 壽命 24h、viewer 複用 `cindy.` subdomain |
 | 1.2 | 2026-06-13 | 實機驗證通過；修正共享 volume 非 root 寫入權限（commit 62d9c94） |
+| 1.3 | 2026-06-13 | Archived — implementation complete（實機驗證全綠；後續修正含 clean-delivery、歷史汙染、sanitizer 強化；planner 幻覺另列 backlog） |
