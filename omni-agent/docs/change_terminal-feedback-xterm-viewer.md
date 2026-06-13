@@ -210,7 +210,10 @@ vendored xterm.js 的輕量 HTML 頁，渲染該 task 的 log（含 ANSI 色彩�
 - ✅ `home_context` 指標：`_record_terminal_pointer` 寫入 command/created_at/status，輪詢以 JSONB `||` 合併更新 status。
 - ✅ 保留期清理：meta 改 8 天前 → prune 刪 log+meta、`DELETE ... WHERE key=ANY()` 刪 `home_context` 列。
 - 🐛 **驗證發現並修正**：terminal-logs named volume 初始化為 root 擁有，非 root（uid 10001）sandbox 寫 log 被拒（`/exec` 假性成功但無檔）。修正：sandbox Dockerfile 預建 `/sandbox/logs` 並 chown；brain 開機 `ensure_log_dir_writable()` chown 排除競態。（commit `62d9c94`）
-- ⚠️ **仍未驗證**：完整 `/chat` LLM 鏈路（planner→terminal→reporter 出稿）需 admin user + LLM；Caddy OAuth→brain 對外鏈路（secure-gateway 外部相依）；手機瀏覽器實際渲染。
+- ✅ **完整 `/chat` LLM 鏈路**：以 admin user 送「執行 ls -la」，local gemma planner→confirmer(allowlist 免確認)→executor(sandbox)→reporter 全程通過，回覆為 Cindy 語氣一句話 + 唯一 viewer 連結。
+  - 🐛 **首測發現並修正**：reporter 原把輸出餵 LLM → 弱模型(1)貼整段原始輸出、(2)因歷史含連結樣式學舌仿造假連結 → 雙連結。修正為只餵 metadata + `_sanitize_terminal_reply` 移除模型自產連結/程式碼區塊（commit `ff6befe`）。重測：無原始輸出、link 數=1。
+- ✅ **viewer 實機渲染**：headless chromium 開啟 `view` 連結，WebSocket 串流 ANSI 正確上色（綠/黃/紅/青/紫），截圖佐證。
+- ⚠️ **仍未驗證**：Caddy OAuth→brain 對外鏈路（secure-gateway 外部相依）；真實手機（非 headless）瀏覽器。
 
 ## Revision History
 | Version | Date | Changes |
