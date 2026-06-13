@@ -126,7 +126,7 @@ async def planner_node(state: AgentState):
             media_type = state["attachment"].get("media_type") or "file"
             if media_type in ("sticker", "tgs_sticker", "animation"):
                 normalized = "sticker" if media_type == "tgs_sticker" else media_type
-                decision = router.select_provider({"message_type": normalized})
+                decision = state["model_router"].select_provider({"message_type": normalized})
                 selected_provider = decision["provider"]
                 routing_reason = f"attachment_routing+{decision['reason']}"
                 timer.executor_chosen = selected_provider
