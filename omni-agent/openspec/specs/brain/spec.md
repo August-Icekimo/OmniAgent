@@ -1,22 +1,31 @@
 ## ADDED Requirements
 
-### Requirement: Stateful Agentic Flow (LangGraph)
-The brain must use a stateful graph to process complex requests that involve multiple steps or user confirmations.
+### Requirement: Agentic Flow via Native Tool Calling (LangGraph)
+The brain must use a stateful graph with **provider-native tool calling** (function calling) to decide when to invoke skills, rather than prompt-based JSON. This prevents the model from fabricating tool output: tool results are injected by the harness, never generated as the model's answer.
 
-#### Scenario: Planning and Tool Selection
-- **WHEN** a user message is received
-- **THEN** the `planner` node must analyze the intent and determine if a skill (tool) is required
-- **AND** output a plan summary.
+#### Scenario: Tool-Call Loop
+- **WHEN** a (non-attachment) user message is received
+- **THEN** the `planner` node selects a provider and the `agent` node calls the LLM with the registered tool specs (`temperature=0`)
+- **AND** if the model emits `tool_calls`, the `tools` node executes them and feeds real results back, looping until the model returns a final answer or the iteration cap (5) is reached.
+
+#### Scenario: No Fabricated Execution
+- **WHEN** the model has not emitted a `tool_call`
+- **THEN** the reply is a normal chat answer and MUST NOT claim to have run a command or include a tool-derived link (sanitized defensively).
+
+#### Scenario: Safety Gates Before Execution
+- **WHEN** a `terminal` tool_call is requested
+- **THEN** non-admin users are refused, and dangerous commands are blocked before reaching the sandbox.
 
 #### Scenario: Explicit Confirmation for Write Operations
-- **WHEN** a plan involves a "write" operation (e.g., restarting a service)
-- **THEN** the system must transition to the `confirmer` node
-- **AND** ask the user for explicit approval before proceeding to execution.
+- **WHEN** a tool_call is write/side-effecting (e.g., non-allowlisted terminal command, wake_on_lan, cockpit restart_service) and not yet confirmed
+- **THEN** execution pauses and the system asks for approval, persisting the pending tool-call conversation
+- **AND** on the user's approval the next turn resumes and executes the approved tool_call.
 
-#### Scenario: Tool Execution and Reporting
-- **WHEN** a plan is approved or identified as "read-only"
-- **THEN** the system must execute the skill via the Skills Server
-- **AND** the `reporter` node must convert the technical output into a natural language response in Cindy's persona.
+#### Scenario: Attachment Path Unchanged
+- **WHEN** a message carries an attachment
+- **THEN** it routes to `file_analyze` (executor → reporter), independent of the tool-call loop.
+
+Note: the legacy prompt-JSON planner and the local-model self-upgrade flag (`upgrade_needed`) have been removed.
 
 ### Requirement: Proactive System Assistance
 The brain must monitor system state and proactively propose optimizations or report anomalies.
