@@ -455,7 +455,8 @@ def _sanitize_terminal_reply(text) -> str:
         return ""
     text = _VIEWER_LINK_RE.sub("", text)
     text = _VIEWER_URL_RE.sub("", text)
-    text = _CODE_FENCE_RE.sub("", text)
+    text = _CODE_FENCE_RE.sub("", text)        # 成對 ```...``` 區塊
+    text = re.sub(r"```.*$", "", text, flags=re.DOTALL)  # 未閉合的尾段 ``` 也清掉
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
