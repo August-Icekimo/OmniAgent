@@ -3,8 +3,48 @@
 import os
 from google import genai
 from google.genai import types
-from .base import ModelClient, Message, LLMResponse, Role
+from .base import ModelClient, Message, LLMResponse, Role, ToolCall, ToolSpec
 from .gemini_utils import build_gemini_parts
+
+
+def _to_gemini_contents(messages: list[Message]) -> list:
+    """內部 Message → Gemini contents。
+
+    Gemini 角色僅 user/model；函式呼叫在 model 的 function_call part，函式結果以
+    Part.from_function_response（**依函式名配對**，Gemini 無 call id）放進 user content。
+    """
+    contents = []
+    for m in messages:
+        if m.role == Role.SYSTEM:
+            continue
+        if m.role == Role.TOOL:
+            contents.append(types.Content(role="user", parts=[
+                types.Part.from_function_response(name=m.name, response={"output": m.content or ""})]))
+        elif m.role == Role.ASSISTANT and m.tool_calls:
+            parts = []
+            if m.content:
+                parts.append(types.Part(text=m.content))
+            for tc in m.tool_calls:
+                parts.append(types.Part(function_call=types.FunctionCall(name=tc.name, args=tc.arguments)))
+            contents.append(types.Content(role="model", parts=parts))
+        else:
+            role = "user" if m.role == Role.USER else "model"
+            contents.append(types.Content(role=role, parts=build_gemini_parts(m.content)))
+    return contents
+
+
+def _parse_gemini(response):
+    """從 Gemini 回應抽 text 與 function_call（避免 response.text 在 function-call
+    回應上拋例外），正規化 function_call → ToolCall（id 用函式名，Gemini 無 call id）。"""
+    text_parts, tool_calls = [], []
+    if response.candidates and response.candidates[0].content:
+        for part in (response.candidates[0].content.parts or []):
+            if getattr(part, "text", None):
+                text_parts.append(part.text)
+            elif getattr(part, "function_call", None):
+                fc = part.function_call
+                tool_calls.append(ToolCall(id=fc.name, name=fc.name, arguments=dict(fc.args or {})))
+    return "".join(text_parts), tool_calls
 
 
 class GeminiClient(ModelClient):
@@ -56,22 +96,29 @@ class GeminiClient(ModelClient):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         thinking_budget: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str = "auto",
         model: str | None = None,
     ) -> LLMResponse:
         target_model = model or self._model
-        
-        contents = []
-        for m in messages:
-            if m.role == Role.SYSTEM:
-                continue
-            role = "user" if m.role == Role.USER else "model"
 
-            contents.append(types.Content(role=role, parts=build_gemini_parts(m.content)))
+        contents = _to_gemini_contents(messages)
+
+        # 內部 ToolSpec → Gemini function declarations
+        # NOTE: Gemini tool 路徑在本環境無 API key、未實機驗證；local-first 下 gemini 為
+        # fallback。正式倚賴前需 smoke test（function_call 觸發 + functionResponse 回填）。
+        gemini_tools = None
+        if tools:
+            gemini_tools = [types.Tool(function_declarations=[
+                types.FunctionDeclaration(name=t.name, description=t.description, parameters=t.parameters)
+                for t in tools])]
 
         generate_config = types.GenerateContentConfig(
             temperature=temperature,
             max_output_tokens=max_tokens,
         )
+        if gemini_tools:
+            generate_config.tools = gemini_tools
 
         if thinking_budget is not None and thinking_budget >= 0:
             generate_config.thinking_config = types.ThinkingConfig(
@@ -79,9 +126,9 @@ class GeminiClient(ModelClient):
                 thinking_budget=thinking_budget
             )
 
-        # 嘗試使用 context cache
+        # 嘗試使用 context cache（帶 tools 時跳過：tool 回合短，且 cache+tools 易衝突）
         cached_content = None
-        if system_prompt:
+        if system_prompt and not gemini_tools:
             cached_content = await self._get_or_create_cache(system_prompt)
 
         if cached_content:
@@ -121,20 +168,25 @@ class GeminiClient(ModelClient):
             if hasattr(response.usage_metadata, "cached_content_token_count"):
                 usage["cache_read_tokens"] = response.usage_metadata.cached_content_token_count
 
-        # MAX_TOKENS 統一映射為 "length"（與 OpenAI 慣例一致），供上層偵測截斷
+        content, tool_calls = _parse_gemini(response)
+
+        # finish_reason：有 function_call → "tool_calls"；MAX_TOKENS → "length"
         finish_reason = ""
-        if response.candidates:
+        if tool_calls:
+            finish_reason = "tool_calls"
+        elif response.candidates:
             raw_reason = getattr(response.candidates[0], "finish_reason", None)
             if raw_reason is not None and "MAX_TOKENS" in str(raw_reason):
                 finish_reason = "length"
 
         return LLMResponse(
-            content=response.text,
+            content=content,
             model=target_model,
             provider="gemini",
             usage=usage,
             cached=cached_content is not None,
             finish_reason=finish_reason,
+            tool_calls=tool_calls,
         )
 
     def provider_name(self) -> str:
