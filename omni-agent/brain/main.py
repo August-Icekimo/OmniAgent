@@ -31,6 +31,22 @@ logging.basicConfig(
 logger = logging.getLogger("brain")
 
 
+_VIEWER_LINK_RE = re.compile(r"\[[^\]]*\]\((?:https?://)?[^)]*?/terminal/view/[^)]*\)")
+_VIEWER_URL_RE = re.compile(r"(?:https?://)?\S*/terminal/view/\S+")
+
+
+def _strip_viewer_links(text: str) -> str:
+    """存入對話歷史前移除終端機 viewer 連結，避免歷史汙染使模型學舌仿造假連結。
+
+    回給使用者的 reply_text 仍保留真連結；只有「寫進記憶的副本」被清掉連結。
+    """
+    if not text:
+        return text
+    text = _VIEWER_LINK_RE.sub("", text)
+    text = _VIEWER_URL_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def _media_placeholder(attachment: "AttachmentModel") -> str:
     """Generate a content-addressed placeholder for an attachment.
     Uses SHA-256 of file bytes (first 512 KB) so the same media maps to
@@ -493,10 +509,12 @@ async def chat(msg: StandardMessage):
         model_name = client.model_name() if client else "unknown"
 
         if pool and "upgrade_needed" not in reply_text:
-            # 舉旗 JSON 絕不入庫——歷史汙染會讓後續模型學舌輸出原始 JSON
+            # 舉旗 JSON 絕不入庫——歷史汙染會讓後續模型學舌輸出原始 JSON。
+            # 同理 viewer 連結也不入庫：否則模型會仿造假連結（甚至沿用舊網域如
+            # localhost），把 [📄...](…/terminal/view/…) 從歷史學去亂貼。
             round_messages = [
                 {"role": "user", "content": user_content},
-                {"role": "assistant", "content": reply_text}
+                {"role": "assistant", "content": _strip_viewer_links(reply_text)}
             ]
             metadata = {
                 "model": model_name,
@@ -607,7 +625,7 @@ async def auto_confirm_model_upgrade(app, orig_msg: StandardMessage, state: dict
                 }
                 round_messages = [
                     {"role": "user", "content": orig_msg.text or ""},
-                    {"role": "assistant", "content": reply_text}
+                    {"role": "assistant", "content": _strip_viewer_links(reply_text)}
                 ]
                 asyncio.create_task(app.state.short_term.save(user_id, orig_msg.platform, round_messages, metadata))
             
