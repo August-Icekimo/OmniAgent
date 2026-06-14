@@ -16,7 +16,7 @@
       "context_length": 200000
     },
     "local": {
-      "model": "gemma-4-26b",
+      "model": "gemma-4-26b-4bit",
       "enabled": true,
       "skip_in_test": true,
       "health_check": true,
