@@ -90,8 +90,10 @@ Cindy 回覆時會搞錯「現在」——實機看到模型自稱「現實時�
 
 ## 實作狀態 (2026-06-14)
 
-> 三個 Task **程式碼完成、`py_compile` 通過**。AC 多為實機（看 system_prompt / 模型回覆）
-> 驗證項，**待 2026-06-15 另窗實機測**（使用者）。
+> 三個 Task **程式碼完成、`py_compile` 通過**；**2026-06-14 已部署(brain rebuild)**。
+> **部署 smoke 通過**：問「今天幾號/現在幾點」→「今天是 2026 年 6 月 14 日，週日。現在是
+> 晚上 11 點 07 分」(本地 gemma)——日期/星期/時間正確、**2024 幻覺消失**(Task 1 核心 AC 達成)。
+> Task 2 gap-aware 歷史標時、Task 3 stress_logs 顯示，待 2026-06-15 另窗較完整測。
 
 - **Task 1（Layer A now）**：`loader.render` 注入 `now`（容器-台北 `datetime.now()`，含星期），
   `context.md.jinja` 新增 `## Now`（置動態區最前、非快取段）。並改 DB 失敗不再退回純靜態 →
