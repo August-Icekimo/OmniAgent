@@ -160,8 +160,14 @@ abort 是否真停（不信 200）。
   （`sent slow-reply postback button` → deliverDoneTurn `cached for LINE postback`
   → 使用者按鈕 → `delivered batch via reply token`；`line_pending_replies` 狀態機
   pending→ready→delivered 乾淨）、以及後續一般 reply-token 快回。使用者回報「基本上正確」。
-- ◌ 真實 **Telegram** 投遞：本機僅合成 user（投遞 400 chat not found）；待真帳號。
+- ✅ **真實 Telegram session 驗證（使用者實測 2026-06-14）**：webhook 全 200、真實投遞
+  成功（DB 全 delivered、無 send-failed）、無 local fallback。**連串取消壓力測試**：使用者
+  連發 4 則（各落在前一輪 local 處理中）→ 引擎逐次 cancel+重組**累積 1→2→3→4 msgs**，
+  最後僅交付一則含全部 4 則的合併回覆（turn a437056d），3 個中間 turn 乾淨 cancelled、
+  **零重複回覆**；且整串中斷全走**本地路徑**（gemma-4-26b-4bit，每次 ~1-2s 內 cancelled）
+  → 本地 mid-burst 中斷在真實 TG 連驗三次。
 - ◌ Task 6 ladder 進階兩段（ride-along / urgency-gated push）：未做。
+- 〔非 turn-engine 觀察〕回覆內模型日期認知有誤（自稱 2024 年）——SOUL/模型內容問題，另案。
 
 > 以下為各 Task 程式碼完成度。
 
