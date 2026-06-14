@@ -141,10 +141,17 @@ abort 是否真停（不信 200）。
 
 ---
 
+## Schema（2026-06-14 已確認，migration 009）
+
+決定：**新增 `turns` 表 + 全解耦交付**（DB 驅動，因 gateway 多 worker，in-memory timer 會 race）。
+- `message_queue` 加 `user_id`（從 payload 反正規化）、`turn_id`；新增 `message_queue_user_pending` 索引。
+- 新表 `turns`：`status`(assembling/processing/committed/done/cancelled/failed)、
+  `silence_deadline`、`hard_deadline`、`commit_passed`、`cancel_requested`、`result`。
+- `turns_one_active_per_user`(UNIQUE partial) → per-user 序列化；`turns_due`、`turns_deliverable` 供 forwarder 掃描。
+- 詳見 `db/migrations/009_conversational_turns.sql` 與 `db/SCHEMA.md`。
+
 ## Open Questions
 
-- **DB schema**：per-user 序列化與 in-flight/decoupled 狀態能否用既有 `message_queue` +
-  `home_context` 達成？若需新欄位/表 → 依 CLAUDE.md **先確認再做**。
 - 本地 abort 的正確 `request_id` 來源與 scheduler `request_id_to_uid` 映射（Task 4 驗證）。
 - 確切 LINE reply-token 窗實值（Task 6 驗證）。
 - commit point 在 graph 的精確位置（Task 2）。
