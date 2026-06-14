@@ -78,19 +78,17 @@ TOOL_SPECS_BY_NAME = {t.name: t for t in TOOL_SPECS}
 
 
 def tool_needs_confirmation(name: str, args: dict) -> bool:
-    """此 tool_call 是否屬「寫入/有副作用」需先確認。
+    """此 tool_call 是否需「執行前確認」。
 
-    terminal 依 allowlist 判定（唯讀命令免確認）；admin 閘門與危險命令封鎖另在
-    graph 迴圈把關。未知工具一律視為寫入（保守）。
+    terminal **不需確認**：沙箱已隔離（read_only fs、危險命令封鎖、資源限制），
+    執行安全由沙箱顧好，直接跑。其餘有真實世界副作用、不受沙箱保護的寫入工具
+    （wake_on_lan、cockpit restart_service…）仍需確認。
     """
-    if name == "web_search":
+    if name in ("web_search", "terminal"):
         return False
     if name == "cockpit":
         return (args or {}).get("action") == "restart_service"
-    if name == "terminal":
-        from skills.terminal import is_allowlisted
-        return not is_allowlisted(str((args or {}).get("command", "")))
-    return True  # wake_on_lan 及未知工具：保守視為寫入
+    return True  # wake_on_lan 及未知工具：保守視為寫入需確認
 
 
 async def execute_tool(name: str, args: dict, model_router) -> dict:

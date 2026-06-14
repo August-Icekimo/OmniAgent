@@ -311,7 +311,6 @@ async def tools_node(state: AgentState):
     messages = list(state["messages"])
     last = messages[-1] if messages else None
     tool_calls = (getattr(last, "tool_calls", None) or []) if last else []
-    pool = getattr(state["model_router"], "_db_pool", None)
     confirmed = state.get("confirmation_received", False)
     pending_link = state.get("pending_viewer_link")
     out: dict = {"tool_iterations": state.get("tool_iterations", 0) + 1}
@@ -319,21 +318,10 @@ async def tools_node(state: AgentState):
     for tc in tool_calls:
         name, args = tc.name, (tc.arguments or {})
 
-        # --- 安全把關：terminal admin 閘門 + 危險命令封鎖 ---
+        # --- 安全把關：terminal 危險命令封鎖（沙箱已隔離；不再要求 admin 同意）---
         if name == "terminal":
             from skills.terminal import is_dangerous
             command = str(args.get("command") or "")
-            is_admin = False
-            if pool:
-                try:
-                    row = await pool.fetchrow("SELECT role FROM users WHERE id = $1", state.get("user_id"))
-                    is_admin = bool(row and row["role"] == "admin")
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(f"terminal admin check failed: {e}")
-            if not is_admin:
-                out["messages"] = messages
-                out["final_reply"] = "這個我只聽 Iceman 的，沒辦法幫你在系統上執行命令喔。"
-                return out
             danger = is_dangerous(command)
             if danger:
                 logger.warning("tools_node BLOCKED dangerous terminal command (%s): %r", danger, command)
