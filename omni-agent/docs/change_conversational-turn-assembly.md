@@ -142,7 +142,16 @@ abort 是否真停（不信 200）。
   原 turn `cancelled` → 原訊息+更正**重組成新 turn（2 msgs）**投遞。commit-point 行為成立。
 - ✅ **串流 tool_calls 不退化**：直打 `local_client`（0.7.3）→ `finish=tool_calls`、
   `get_weather{'city':'台北'}` 正確重組；純文字 `finish=stop` 乾淨收尾。**Task 4 串流改造驗證**。
-- ✅ **Task 4 abort 機制**（先前直接對 server 驗）：關連線 → disconnect_guard → orphan abort → GPU 釋放。
+- ✅ **本地路徑 mid-burst 中斷（端到端，補驗 2026-06-14）**：local 作答中注入更正 →
+  brain `local turn cancelled — closing stream` → **rapid-mlx server log**
+  `CLEANUP done, 1 chunks, elapsed=3.5s` + `Aborting orphaned MLLM request` → GPU 釋放
+  （num_running→0）→ 原 turn `cancelled`、原+更正**重組 2-msg turn 經 local 投遞**。
+  證實 `stream.close()`（finally）確實關連線觸發 server 端 abort。
+- ⚠️ **routing 隱性 bug（已修）**：alias 改名後只改 `.env` 不夠——`routing_config.json`
+  的 `local.model` 會覆寫 client `_model`，舊 alias → 404 → fallback gemini「代答」。
+  前期 Test 1/2 其實是 gemini 回的；補正 `routing_config.json` 後 local 才真正作答
+  （footer 顯示 `gemma-4-26b-4bit`）。alias 共三處：plist / `.env` / `routing_config.json`。
+- ✅ **Task 4 abort 機制**（先前直接對 server 驗 + 上面端到端）：關連線 → disconnect_guard → orphan abort → GPU 釋放。
 - ⚠️ **migration 無自動套用機制**：`compose.yml` 只把 `db/migrations` 掛到
   `/docker-entrypoint-initdb.d`（**僅 fresh volume 跑一次**）。009 對既有 DB **需手動套用**
   （`psql < db/migrations/009_*.sql`，本次已套）。專案缺增量 migration runner——部署時注意。
