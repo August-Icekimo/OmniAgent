@@ -79,9 +79,34 @@ erDiagram
 | `stress_level` | text | | 寫入時的系統壓力等級 |
 | `created_at` | timestamptz | `now()` | 寫入時間 |
 | `locked_at` | timestamptz | | 被大腦取走處理的時間 |
+| `user_id` | uuid | | （009）從 payload 反正規化，供 per-user turn 收斂查詢/鎖定 |
+| `turn_id` | uuid | | （009）所屬 `turns.id`；被收斂進某個 turn 後填入 |
 
 **關鍵索引**: 
 - `message_queue_pending`: `(priority DESC, created_at)` WHERE status = 'pending'
+- `message_queue_user_pending`: `(user_id, created_at)` WHERE status = 'pending'（debounce 認領）
+
+### `turns` — 對話回合（turn 組裝與原子性，009 新增）
+把同一人短時間內的多則訊息（burst）收斂成一個 **turn** 再叫 brain，turn 為**原子單位**直到 commit point。debounce 計時、per-user 序列化、解耦交付與 cancel-on-withdrawal 皆以本表為單一事實來源（gateway 多 worker，用 DB 驅動避免 in-memory timer race）。
+
+| 欄位 | 類型 | 預設值 | 說明 |
+| :--- | :--- | :--- | :--- |
+| `id` | uuid | `gen_random_uuid()` | 主鍵 |
+| `user_id` | uuid | | 所屬用戶 |
+| `platform` | text | | `line` / `telegram` |
+| `status` | text | `'assembling'` | `assembling`/`processing`/`done`/`delivered`/`cancelled`/`failed`（active = 前兩者） |
+| `silence_deadline` | timestamptz | | reset-on-each silence timer（每來一則 bump，~4s） |
+| `hard_deadline` | timestamptz | | 首訊息 + ceiling（~30s）封頂，防慢打字者餓死 |
+| `commit_passed` | boolean | `false` | 原子性 commit point：true 後新輸入開新 turn |
+| `cancel_requested` | boolean | `false` | withdrawal/supersede 訊號（brain 輪詢，所有路徑中斷） |
+| `result` | text | | 解耦交付：brain 寫回覆全文（含 footer），forwarder 投遞 |
+| `created_at` | timestamptz | `now()` | 建立時間 |
+| `updated_at` | timestamptz | `now()` | 狀態變更時間 |
+
+**索引**:
+- `turns_one_active_per_user`: UNIQUE `(user_id)` WHERE status IN ('assembling','processing')（per-user 序列化）
+- `turns_due`: `(silence_deadline)` WHERE status = 'assembling'（到期掃描）
+- `turns_deliverable`: `(updated_at)` WHERE status = 'done'（投遞掃描）
 
 ### `stranger_knocks` — 陌生人訊息紀錄
 紀錄尚未綁定 `users` 的外部聯繫。

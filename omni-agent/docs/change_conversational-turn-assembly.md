@@ -130,6 +130,81 @@ abort 是否真停（不信 200）。
 
 ---
 
+## 實作狀態 (2026-06-14)
+
+> 2026-06-14 已 `podman compose up --build` 實機跑過核心路徑（見「實機驗證」段）。
+
+### 實機驗證 (2026-06-14, podman 本機)
+- ✅ **turn 合併**：同一人 3 則 burst → **單一 turn（3 msgs）**、brain `/turn` 只被叫一次、
+  合併成單一回覆；lifecycle assembling→processing→done→delivered 正常。
+- ✅ **mid-burst 更正中斷**：turn processing 中注入更正 → gateway 置 cancel_requested →
+  brain log `conversation cancelled`（gemini SDK 呼叫被 asyncio cancel，**Task 3 升級路徑驗證**）→
+  原 turn `cancelled` → 原訊息+更正**重組成新 turn（2 msgs）**投遞。commit-point 行為成立。
+- ✅ **串流 tool_calls 不退化**：直打 `local_client`（0.7.3）→ `finish=tool_calls`、
+  `get_weather{'city':'台北'}` 正確重組；純文字 `finish=stop` 乾淨收尾。**Task 4 串流改造驗證**。
+- ✅ **本地路徑 mid-burst 中斷（端到端，補驗 2026-06-14）**：local 作答中注入更正 →
+  brain `local turn cancelled — closing stream` → **rapid-mlx server log**
+  `CLEANUP done, 1 chunks, elapsed=3.5s` + `Aborting orphaned MLLM request` → GPU 釋放
+  （num_running→0）→ 原 turn `cancelled`、原+更正**重組 2-msg turn 經 local 投遞**。
+  證實 `stream.close()`（finally）確實關連線觸發 server 端 abort。
+- ⚠️ **routing 隱性 bug（已修）**：alias 改名後只改 `.env` 不夠——`routing_config.json`
+  的 `local.model` 會覆寫 client `_model`，舊 alias → 404 → fallback gemini「代答」。
+  前期 Test 1/2 其實是 gemini 回的；補正 `routing_config.json` 後 local 才真正作答
+  （footer 顯示 `gemma-4-26b-4bit`）。alias 共三處：plist / `.env` / `routing_config.json`。
+- ✅ **Task 4 abort 機制**（先前直接對 server 驗 + 上面端到端）：關連線 → disconnect_guard → orphan abort → GPU 釋放。
+- ⚠️ **migration 無自動套用機制**：`compose.yml` 只把 `db/migrations` 掛到
+  `/docker-entrypoint-initdb.d`（**僅 fresh volume 跑一次**）。009 對既有 DB **需手動套用**
+  （`psql < db/migrations/009_*.sql`，本次已套）。專案缺增量 migration runner——部署時注意。
+- ✅ **真實 LINE session 驗證（使用者實測 2026-06-14）**：一次涵蓋 LINE turn 組裝、
+  **真實 mid-burst 中斷**（turn 7002ef1b → cancelled）、**慢回 postback 按鈕→取件**
+  （`sent slow-reply postback button` → deliverDoneTurn `cached for LINE postback`
+  → 使用者按鈕 → `delivered batch via reply token`；`line_pending_replies` 狀態機
+  pending→ready→delivered 乾淨）、以及後續一般 reply-token 快回。使用者回報「基本上正確」。
+- ✅ **真實 Telegram session 驗證（使用者實測 2026-06-14）**：webhook 全 200、真實投遞
+  成功（DB 全 delivered、無 send-failed）、無 local fallback。**連串取消壓力測試**：使用者
+  連發 4 則（各落在前一輪 local 處理中）→ 引擎逐次 cancel+重組**累積 1→2→3→4 msgs**，
+  最後僅交付一則含全部 4 則的合併回覆（turn a437056d），3 個中間 turn 乾淨 cancelled、
+  **零重複回覆**；且整串中斷全走**本地路徑**（gemma-4-26b-4bit，每次 ~1-2s 內 cancelled）
+  → 本地 mid-burst 中斷在真實 TG 連驗三次。
+- ◌ Task 6 ladder 進階兩段（ride-along / urgency-gated push）：未做。
+- 〔非 turn-engine 觀察〕回覆內模型日期認知有誤（自稱 2024 年）——SOUL/模型內容問題，另案。
+
+> 以下為各 Task 程式碼完成度。
+
+- **Task 1（turn 組裝 + 序列化）**：✅ 程式碼完成。gateway turn 引擎
+  `gateway/internal/forwarder/turns.go`（assemble/dispatch/deliver）+ 改寫
+  `brain.go` 迴圈；DB 驅動 debounce、partial unique index 序列化。`go build` 通過。待實機驗收。
+- **Task 2（解耦交付 + commit point）**：✅ 解耦交付完成。brain `/turn` 非同步寫
+  `turns.result`、forwarder 投遞；`/chat` 與 `/turn` 共用 `_execute_conversation`。
+  commit_passed 於 done 置位。**commit-point 的「fold vs 新 turn」邊界邏輯併入 Task 3/4
+  的撤回偵測**（gateway 偵測 processing 中的後續訊息）。py_compile 通過。
+- **Task 3（升級路徑 cancel）**：✅ 程式碼完成。gateway 撤回偵測（processing 且
+  commit_passed=false 又有新訊息 → 置 cancel_requested，並釋回原訊息與更正重組成新
+  turn）；brain asyncio cancel 中止升級 SDK 呼叫。commit point 採保守設定（commit_passed
+  於 done 才置 true，故整個 processing 窗可取消）。`go build` 通過。
+- **Task 4（本地 streaming abort）**：✅ 程式碼完成 + **abort 機制已實機驗證**
+  （Rapid-MLX 0.7.3，2026-06-14）。`local_client` 改 streaming；CancelledError 時
+  `finally: await stream.close()` **關閉連線** → server `disconnect_guard` 偵測斷線 →
+  `Aborting orphaned MLLM request` → GPU 釋放（實測 8s 斷線即 CLEANUP、num_running→0）。
+  串流 tool_calls 以 `_stream_tool_calls` 重組。
+  ⚠️ 關鍵更正：`POST /v1/requests/{chatcmpl-id}/cancel` 端點**對串流請求無效**
+  （chatcmpl id 不對應 scheduler 內部 uuid，實測回 200 但生成跑到底）——已**移除**該呼叫，
+  改採連線關閉。仍待實機驗證：gemma 串流 tool_calls 行為與非串流一致。py_compile 通過。
+- **Task 5（本地 prompt cache）**：◐ 已在 chrysoberyl 啟用 `--enable-prefix-cache`
+  並重啟（plist 已改）。但實測效益有限：`/v1/status cache.enabled` 仍 false（batched
+  `--mllm` 模式不用的 legacy 欄位），同 prompt 連打 TTFT 僅 ~13% 改善。on-disk prefix
+  cache lifespan 有作用但非大幅。詳見記憶 [[ref_local_mlx_gemma4]]。
+- **Rapid-MLX 0.6.82 → 0.7.3 升級（2026-06-14，伺服器側）**：
+  - **model alias 改名** `gemma-4-26b` → `gemma-4-26b-4bit`：已更新 `.env` 與
+    `.env.example` 的 `MLX_MODEL`（舊 alias 0.7.3 直接 404，brain 會打不到 MLX）。
+  - **stop-token patch 不再需要**：0.7.3 `_get_stop_tokens` 改為四來源，實測 gemma
+    開放式回覆 `finish=stop` 乾淨收尾、無重複/`<turn|>` 殘留——上游已修，無需再打 patch。
+  - plist 重啟 SOP：bootout 後**務必 sleep 再 bootstrap**，否則 I/O error 不啟動。
+- **Task 6（LINE re-trigger ladder）**：◐ 部分完成。既有 postback 按鈕（re-trigger
+  元件）+ `claimPendingLineReply` 取件已接上 turn 引擎；**新增 burst 去重**（一陣訊息
+  只送一顆按鈕）。**待補**：ride-along（搭下一則 organic inbound）與 push 僅限
+  urgency-flag 兩段階梯；urgency flag 定義（與 Card 2 共用）。
+
 ## Testing Notes
 
 - 無自動 runner；以 `podman compose` 起 gateway+brain，用 TG/LINE 實機對話驗收。
@@ -141,10 +216,17 @@ abort 是否真停（不信 200）。
 
 ---
 
+## Schema（2026-06-14 已確認，migration 009）
+
+決定：**新增 `turns` 表 + 全解耦交付**（DB 驅動，因 gateway 多 worker，in-memory timer 會 race）。
+- `message_queue` 加 `user_id`（從 payload 反正規化）、`turn_id`；新增 `message_queue_user_pending` 索引。
+- 新表 `turns`：`status`(assembling/processing/committed/done/cancelled/failed)、
+  `silence_deadline`、`hard_deadline`、`commit_passed`、`cancel_requested`、`result`。
+- `turns_one_active_per_user`(UNIQUE partial) → per-user 序列化；`turns_due`、`turns_deliverable` 供 forwarder 掃描。
+- 詳見 `db/migrations/009_conversational_turns.sql` 與 `db/SCHEMA.md`。
+
 ## Open Questions
 
-- **DB schema**：per-user 序列化與 in-flight/decoupled 狀態能否用既有 `message_queue` +
-  `home_context` 達成？若需新欄位/表 → 依 CLAUDE.md **先確認再做**。
 - 本地 abort 的正確 `request_id` 來源與 scheduler `request_id_to_uid` 映射（Task 4 驗證）。
 - 確切 LINE reply-token 窗實值（Task 6 驗證）。
 - commit point 在 graph 的精確位置（Task 2）。

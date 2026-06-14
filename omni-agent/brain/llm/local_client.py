@@ -8,6 +8,7 @@ thinking_budget > 0 才啟用 enable_thinking；預設關閉。
 （audio/video block Rapid-MLX 會靜默丟棄，本端直接拒收讓 router fallback）。
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -121,6 +122,24 @@ def _parse_tool_calls(message) -> list[ToolCall]:
     return out
 
 
+def _stream_tool_calls(tool_acc: dict[int, dict]) -> list[ToolCall]:
+    """把串流累積的 tool_call deltas（index → {id,name,args}）組回 ToolCall。
+    arguments 為跨 chunk 串接的 JSON 字串，於此一次解析（容錯）。"""
+    out = []
+    for idx in sorted(tool_acc):
+        slot = tool_acc[idx]
+        if not slot.get("name"):
+            continue
+        raw = slot.get("args") or "{}"
+        try:
+            args = json.loads(raw)
+        except (ValueError, TypeError):
+            logger.warning("stream tool_call arguments 非合法 JSON: %r", raw)
+            args = {}
+        out.append(ToolCall(id=slot.get("id") or "", name=slot["name"], arguments=args))
+    return out
+
+
 class LocalClient(ModelClient):
     """本地 MLX 客戶端，透過 OpenAI-compatible API 連接 chrysoberyl。"""
 
@@ -179,24 +198,67 @@ class LocalClient(ModelClient):
             # stop 序列只在純文字生成時套用；tool calling 模式不需要、避免干擾
             kwargs["stop"] = _STOP_SEQUENCES
 
-        response = await self._client.chat.completions.create(**kwargs)
+        # 串流：使用者撤回時關閉連線即可中止本地生成（Rapid-MLX disconnect_guard
+        # 偵測斷線→abort，GPU 釋放）。見下方 except CancelledError（Task 4）。
+        kwargs["stream"] = True
+        kwargs["stream_options"] = {"include_usage": True}
 
-        choice = response.choices[0]
+        content_parts: list[str] = []
+        tool_acc: dict[int, dict] = {}
+        finish_reason = ""
         usage = {}
-        if response.usage:
-            usage = {
-                "input_tokens": response.usage.prompt_tokens,
-                "output_tokens": response.usage.completion_tokens,
-            }
 
-        tool_calls = _parse_tool_calls(choice.message)
-        raw_content = choice.message.content or ""
+        stream = await self._client.chat.completions.create(**kwargs)
+        try:
+            async for chunk in stream:
+                if getattr(chunk, "usage", None):
+                    usage = {
+                        "input_tokens": chunk.usage.prompt_tokens,
+                        "output_tokens": chunk.usage.completion_tokens,
+                    }
+                if not chunk.choices:
+                    continue
+                ch = chunk.choices[0]
+                if ch.finish_reason:
+                    finish_reason = ch.finish_reason
+                delta = ch.delta
+                if not delta:
+                    continue
+                if delta.content:
+                    content_parts.append(delta.content)
+                if delta.tool_calls:
+                    for tcd in delta.tool_calls:
+                        slot = tool_acc.setdefault(
+                            tcd.index, {"id": None, "name": None, "args": ""})
+                        if tcd.id:
+                            slot["id"] = tcd.id
+                        if tcd.function:
+                            if tcd.function.name:
+                                slot["name"] = tcd.function.name
+                            if tcd.function.arguments:
+                                slot["args"] += tcd.function.arguments
+        except asyncio.CancelledError:
+            # 使用者撤回：關閉串流連線即可中止生成。實測（Rapid-MLX 0.7.3）：
+            # client 斷線 → server disconnect_guard 偵測 → "Aborting orphaned MLLM
+            # request" → GPU 釋放。finally 的 stream.close() 負責關連線。
+            # 註：POST /v1/requests/{chatcmpl-id}/cancel 端點對串流請求無效——
+            # chatcmpl id 不對應 scheduler 內部 uuid（實測 200 但生成照跑到底），故不採用。
+            logger.info("local turn cancelled — closing stream to abort generation")
+            raise
+        finally:
+            try:
+                await stream.close()
+            except BaseException:
+                pass
+
+        tool_calls = _stream_tool_calls(tool_acc)
+        raw_content = "".join(content_parts)
         # 有 tool_calls 時 content 通常為空，且不需 thought 清理
         content = raw_content if tool_calls else _clean_output(raw_content)
         if not tool_calls and content != raw_content:
             logger.info(
                 "Local output cleaned: %d -> %d chars (finish_reason=%s)",
-                len(raw_content), len(content), choice.finish_reason,
+                len(raw_content), len(content), finish_reason,
             )
 
         return LLMResponse(
@@ -205,7 +267,7 @@ class LocalClient(ModelClient):
             provider="local",
             usage=usage,
             cached=False,  # 本地模型無 cache 機制
-            finish_reason=choice.finish_reason or "",
+            finish_reason=finish_reason or "",
             tool_calls=tool_calls,
         )
 

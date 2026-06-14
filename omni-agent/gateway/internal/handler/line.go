@@ -21,6 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -229,12 +230,23 @@ func monitorSlowLineReply(db *pgxpool.Pool, msgId, lineID, replyToken string, ex
 		return
 	}
 
+	// 去重：turn 引擎下一陣 burst 會有多則訊息、各自啟一個 monitor goroutine；
+	// 僅在該使用者尚無 pending/ready 取件列時才建立並送按鈕，避免一陣訊息冒出多顆按鈕。
 	var rid string
-	err := db.QueryRow(ctx,
-		"INSERT INTO line_pending_replies (line_id, quote_token) VALUES ($1, NULLIF($2, '')) RETURNING rid",
+	err := db.QueryRow(ctx, `
+		INSERT INTO line_pending_replies (line_id, quote_token)
+		SELECT $1, NULLIF($2, '')
+		WHERE NOT EXISTS (
+			SELECT 1 FROM line_pending_replies
+			WHERE line_id = $1 AND state IN ('pending', 'ready')
+		)
+		RETURNING rid`,
 		lineID, quoteToken).Scan(&rid)
 	if err != nil {
-		log.Printf("LINE: pending reply insert failed: %v", err)
+		// 無回傳列＝已有按鈕在等（去重命中），靜默跳過；其餘為真錯誤。
+		if err != pgx.ErrNoRows {
+			log.Printf("LINE: pending reply insert failed: %v", err)
+		}
 		return
 	}
 
