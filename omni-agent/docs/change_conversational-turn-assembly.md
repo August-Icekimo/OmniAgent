@@ -155,7 +155,13 @@ abort 是否真停（不信 200）。
 - ⚠️ **migration 無自動套用機制**：`compose.yml` 只把 `db/migrations` 掛到
   `/docker-entrypoint-initdb.d`（**僅 fresh volume 跑一次**）。009 對既有 DB **需手動套用**
   （`psql < db/migrations/009_*.sql`，本次已套）。專案缺增量 migration runner——部署時注意。
-- ◌ LINE re-trigger ladder、TG/LINE 真實投遞：未在本機驗（需真實 chat）。
+- ✅ **真實 LINE session 驗證（使用者實測 2026-06-14）**：一次涵蓋 LINE turn 組裝、
+  **真實 mid-burst 中斷**（turn 7002ef1b → cancelled）、**慢回 postback 按鈕→取件**
+  （`sent slow-reply postback button` → deliverDoneTurn `cached for LINE postback`
+  → 使用者按鈕 → `delivered batch via reply token`；`line_pending_replies` 狀態機
+  pending→ready→delivered 乾淨）、以及後續一般 reply-token 快回。使用者回報「基本上正確」。
+- ◌ 真實 **Telegram** 投遞：本機僅合成 user（投遞 400 chat not found）；待真帳號。
+- ◌ Task 6 ladder 進階兩段（ride-along / urgency-gated push）：未做。
 
 > 以下為各 Task 程式碼完成度。
 
