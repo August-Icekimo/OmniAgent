@@ -60,6 +60,35 @@ func assembleTurns(db *pgxpool.Pool) {
 		return
 	}
 
+	// 1.5 撤回偵測（commit-point）：使用者在 turn 仍 processing 且未過 commit point
+	//     （commit_passed=false）時又送新訊息 → 視為更正，標記取消該 turn。
+	//     status='processing' 條件確保不會取消「已 commit（done）」的 turn——
+	//     那種情況下新訊息自然開新 turn（post-commit 語意）。brain 輪詢到
+	//     cancel_requested 後會把該 turn 轉 cancelled。
+	if _, err := db.Exec(ctx, `
+		UPDATE turns t
+		SET cancel_requested = true, updated_at = NOW()
+		WHERE t.status = 'processing' AND t.commit_passed = false
+		  AND t.cancel_requested = false
+		  AND EXISTS (
+		      SELECT 1 FROM message_queue mq
+		      WHERE mq.user_id = t.user_id AND mq.status = 'pending' AND mq.turn_id IS NULL
+		  )
+	`); err != nil {
+		log.Printf("turn assemble: withdrawal detection failed: %v", err)
+	}
+
+	// 1.6 已取消的 turn：把其訊息釋回（turn_id=NULL），與更正訊息一起重新組裝成新 turn，
+	//     讓模型看到「原訊息 + 更正」的完整脈絡。對已完成/投遞的 turn 不動。
+	if _, err := db.Exec(ctx, `
+		UPDATE message_queue mq
+		SET turn_id = NULL
+		FROM turns t
+		WHERE mq.turn_id = t.id AND t.status = 'cancelled' AND mq.status = 'pending'
+	`); err != nil {
+		log.Printf("turn assemble: release cancelled-turn messages failed: %v", err)
+	}
+
 	// 2. 為「有待處理散訊息、但目前無進行中 turn」的使用者建立組裝 turn。
 	//    NOT EXISTS 在單一 forwarder 迴圈下足以避免重複建立；unique index 為防護網。
 	if _, err := db.Exec(ctx, `

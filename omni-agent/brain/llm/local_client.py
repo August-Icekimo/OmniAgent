@@ -8,12 +8,14 @@ thinking_budget > 0 才啟用 enable_thinking；預設關閉。
 （audio/video block Rapid-MLX 會靜默丟棄，本端直接拒收讓 router fallback）。
 """
 
+import asyncio
 import base64
 import json
 import logging
 import os
 import re
 
+import httpx
 from openai import AsyncOpenAI
 from .base import ModelClient, Message, LLMResponse, Role, ToolCall, ToolSpec
 
@@ -121,6 +123,24 @@ def _parse_tool_calls(message) -> list[ToolCall]:
     return out
 
 
+def _stream_tool_calls(tool_acc: dict[int, dict]) -> list[ToolCall]:
+    """把串流累積的 tool_call deltas（index → {id,name,args}）組回 ToolCall。
+    arguments 為跨 chunk 串接的 JSON 字串，於此一次解析（容錯）。"""
+    out = []
+    for idx in sorted(tool_acc):
+        slot = tool_acc[idx]
+        if not slot.get("name"):
+            continue
+        raw = slot.get("args") or "{}"
+        try:
+            args = json.loads(raw)
+        except (ValueError, TypeError):
+            logger.warning("stream tool_call arguments 非合法 JSON: %r", raw)
+            args = {}
+        out.append(ToolCall(id=slot.get("id") or "", name=slot["name"], arguments=args))
+    return out
+
+
 class LocalClient(ModelClient):
     """本地 MLX 客戶端，透過 OpenAI-compatible API 連接 chrysoberyl。"""
 
@@ -179,24 +199,68 @@ class LocalClient(ModelClient):
             # stop 序列只在純文字生成時套用；tool calling 模式不需要、避免干擾
             kwargs["stop"] = _STOP_SEQUENCES
 
-        response = await self._client.chat.completions.create(**kwargs)
+        # 串流：才能擷取首 chunk 的 chatcmpl id，供使用者撤回時呼叫 Rapid-MLX
+        # /v1/requests/{id}/cancel 真正中止執行中生成（Task 4，cancel-on-withdrawal）。
+        kwargs["stream"] = True
+        kwargs["stream_options"] = {"include_usage": True}
 
-        choice = response.choices[0]
+        request_id = None
+        content_parts: list[str] = []
+        tool_acc: dict[int, dict] = {}
+        finish_reason = ""
         usage = {}
-        if response.usage:
-            usage = {
-                "input_tokens": response.usage.prompt_tokens,
-                "output_tokens": response.usage.completion_tokens,
-            }
 
-        tool_calls = _parse_tool_calls(choice.message)
-        raw_content = choice.message.content or ""
+        stream = await self._client.chat.completions.create(**kwargs)
+        try:
+            async for chunk in stream:
+                if request_id is None and getattr(chunk, "id", None):
+                    request_id = chunk.id
+                if getattr(chunk, "usage", None):
+                    usage = {
+                        "input_tokens": chunk.usage.prompt_tokens,
+                        "output_tokens": chunk.usage.completion_tokens,
+                    }
+                if not chunk.choices:
+                    continue
+                ch = chunk.choices[0]
+                if ch.finish_reason:
+                    finish_reason = ch.finish_reason
+                delta = ch.delta
+                if not delta:
+                    continue
+                if delta.content:
+                    content_parts.append(delta.content)
+                if delta.tool_calls:
+                    for tcd in delta.tool_calls:
+                        slot = tool_acc.setdefault(
+                            tcd.index, {"id": None, "name": None, "args": ""})
+                        if tcd.id:
+                            slot["id"] = tcd.id
+                        if tcd.function:
+                            if tcd.function.name:
+                                slot["name"] = tcd.function.name
+                            if tcd.function.arguments:
+                                slot["args"] += tcd.function.arguments
+        except asyncio.CancelledError:
+            # 使用者撤回：通知 Rapid-MLX 中止執行中的請求。detached task 確保
+            # abort 不被同一波取消連帶取消。注意：200 不保證真停，需實機驗證。
+            if request_id:
+                asyncio.create_task(self._abort_request(request_id))
+            raise
+        finally:
+            try:
+                await stream.close()
+            except BaseException:
+                pass
+
+        tool_calls = _stream_tool_calls(tool_acc)
+        raw_content = "".join(content_parts)
         # 有 tool_calls 時 content 通常為空，且不需 thought 清理
         content = raw_content if tool_calls else _clean_output(raw_content)
         if not tool_calls and content != raw_content:
             logger.info(
                 "Local output cleaned: %d -> %d chars (finish_reason=%s)",
-                len(raw_content), len(content), choice.finish_reason,
+                len(raw_content), len(content), finish_reason,
             )
 
         return LLMResponse(
@@ -205,9 +269,21 @@ class LocalClient(ModelClient):
             provider="local",
             usage=usage,
             cached=False,  # 本地模型無 cache 機制
-            finish_reason=choice.finish_reason or "",
+            finish_reason=finish_reason or "",
             tool_calls=tool_calls,
         )
+
+    async def _abort_request(self, request_id: str) -> None:
+        """通知 Rapid-MLX 取消執行中的請求（POST /v1/requests/{id}/cancel）。
+        伺服器端回 cancelled:true 是無條件的、非中止成功證據——須以觀察到的
+        效果（生成停止）驗證（見 change doc Task 4 / 記憶 ref_local_mlx_gemma4）。"""
+        url = f"{self._base_url.rstrip('/')}/requests/{request_id}/cancel"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as c:
+                r = await c.post(url)
+            logger.info("local abort %s -> HTTP %s", request_id, r.status_code)
+        except Exception as e:
+            logger.warning("local abort failed for %s: %s", request_id, e)
 
     def provider_name(self) -> str:
         return "local"
