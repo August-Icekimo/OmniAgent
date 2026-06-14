@@ -65,47 +65,47 @@ control 不誤觸、tool_result 回填後乾淨 grounding 總結（不再加戲�
 資料型別；`ModelClient.chat` 與 `router.chat` 新增 `tools: list[ToolSpec] | None` 參數。
 
 **Acceptance Criteria:**
-- [ ] `LLMResponse.tool_calls` 預設空 list；`finish_reason` 可為 `tool_calls`。
-- [ ] `ToolSpec`（name/description/JSON-schema params）與 `ToolCall`（id/name/args dict）型別定義清楚。
-- [ ] `chat(..., tools=None)` 向後相容：不傳 tools 時行為與現在一致。
-- [ ] 型別有單元測試（序列化/反序列化、空值）。
+- [x] `LLMResponse.tool_calls` 預設空 list；`finish_reason` 可為 `tool_calls`。
+- [x] `ToolSpec`（name/description/JSON-schema params）與 `ToolCall`（id/name/args dict）型別定義清楚。
+- [x] `chat(..., tools=None)` 向後相容：不傳 tools 時行為與現在一致。
+- [x] 型別有單元測試（序列化/反序列化、空值）。
 
 ### Task 2：OpenAI-compat client（local + OpenAI 系）tool calling
 **說明：** `local_client` 把 `tools` 轉成 OpenAI `tools` 欄、`tool_choice:"auto"`，解析回傳
 `tool_calls` 正規化成統一格式；支援把 `tool`/assistant-with-tool_calls 訊息回填。
 
 **Acceptance Criteria:**
-- [ ] actionable prompt → 回傳統一 `tool_calls`（對齊 spike 結果）。
-- [ ] tool_result 回填（assistant tool_calls + role=tool 訊息）→ 模型 grounding 總結。
-- [ ] 無工具意圖 → `tool_calls` 空、正常 content。
-- [ ] arguments 非法 JSON 時容錯（不丟例外，回可辨識錯誤）。
+- [x] actionable prompt → 回傳統一 `tool_calls`（對齊 spike 結果）。
+- [x] tool_result 回填（assistant tool_calls + role=tool 訊息）→ 模型 grounding 總結。
+- [x] 無工具意圖 → `tool_calls` 空、正常 content。
+- [x] arguments 非法 JSON 時容錯（不丟例外，回可辨識錯誤）。
 
 ### Task 3：Claude client tool calling
 **說明：** `claude_client` 用 Anthropic SDK 的 `tools` 與 `tool_use`/`tool_result` blocks，
 正規化成統一格式。
 
 **Acceptance Criteria:**
-- [ ] `tools` → Anthropic tool schema；回傳 `tool_use` → 統一 `tool_calls`。
-- [ ] `tool_result` 回填正確；`stop_reason=tool_use` → `finish_reason="tool_calls"`。
-- [ ] 不傳 tools 時行為不變。
+- [x] `tools` → Anthropic tool schema；回傳 `tool_use` → 統一 `tool_calls`。
+- [x] `tool_result` 回填正確；`stop_reason=tool_use` → `finish_reason="tool_calls"`。
+- [x] 不傳 tools 時行為不變。
 
 ### Task 4：Gemini client tool calling
 **說明：** `gemini_client` 用 google-genai 的 function declarations 與 functionCall/
 functionResponse，正規化成統一格式。
 
 **Acceptance Criteria:**
-- [ ] function declarations 由 `ToolSpec` 產生；`functionCall` → 統一 `tool_calls`。
-- [ ] `functionResponse` 回填正確。
-- [ ] 不傳 tools 時行為不變；多模態路徑不受影響。
+- [x] function declarations 由 `ToolSpec` 產生；`functionCall` → 統一 `tool_calls`。
+- [x] `functionResponse` 回填正確。
+- [x] 不傳 tools 時行為不變；多模態路徑不受影響。
 
 ### Task 5：工具註冊表（skill → ToolSpec）
 **說明：** 建立 skill → `ToolSpec` 的註冊表（terminal / web_search / home_assistant），
 與既有 in-process 執行對接（terminal 走 sandbox、web_search 走 SearXNG…）。
 
 **Acceptance Criteria:**
-- [ ] 每個工具有清楚 schema（name/description/params）。
-- [ ] 工具執行沿用既有實作（terminal→sandbox、web_search→provider），回傳真實結果。
-- [ ] 可選擇性註冊（phased：先只開 terminal 也能跑）。
+- [x] 每個工具有清楚 schema（name/description/params）。
+- [x] 工具執行沿用既有實作（terminal→sandbox、web_search→provider），回傳真實結果。
+- [x] 可選擇性註冊（phased：先只開 terminal 也能跑）。
 
 ### Task 6：tool-call 迴圈（取代 prompt-JSON 管線）+ 移除舉旗
 **說明：** 重構 graph：planner 帶 `tools`、**temp=0** 呼叫 → 若回 `tool_calls`，執行工具、
@@ -114,40 +114,40 @@ functionResponse，正規化成統一格式。
 `_is_upgrade_signal`、空回應/截斷→升級 gemini 的重試分支與 `upgrade_confirm` 路由。
 
 **Acceptance Criteria:**
-- [ ] actionable 請求：跑真實工具 → grounding 總結（無幻覺、無假連結）。
-- [ ] 純聊天請求：不呼叫工具、直接回覆。
-- [ ] 工具決策呼叫使用 temperature=0。
-- [ ] 迭代上限 5：超限不無限迴圈、回誠實「這次沒能完成」。
-- [ ] `cal 1979` 類：即使未路由工具，也**不偽造執行輸出/假連結**（對齊 spike）。
-- [ ] `upgrade_needed` 相關程式碼路徑全數移除，無殘留死碼；provider error fallback 鏈仍保留。
+- [x] actionable 請求：跑真實工具 → grounding 總結（無幻覺、無假連結）。
+- [x] 純聊天請求：不呼叫工具、直接回覆。
+- [x] 工具決策呼叫使用 temperature=0。
+- [x] 迭代上限 5：超限不無限迴圈、回誠實「這次沒能完成」。
+- [x] `cal 1979` 類：即使未路由工具，也**不偽造執行輸出/假連結**（對齊 spike）。
+- [x] `upgrade_needed` 相關程式碼路徑全數移除，無殘留死碼；provider error fallback 鏈仍保留。
 
 ### Task 7：安全把關接回新迴圈
 **說明：** 把 terminal admin 閘門、危險命令封鎖、write op 執行前確認，從舊
 `confirmer_node`（依 plan JSON）接到「執行某個 tool_call 之前」。
 
 **Acceptance Criteria:**
-- [ ] 非 admin 觸發 terminal tool → 拒絕（沿用現有訊息）。
-- [ ] 危險命令（rm -rf 等）→ 執行前封鎖，不送 sandbox。
-- [ ] write op tool_call → 先確認往返才執行（沿用 home_context `confirm:pending`）。
-- [ ] allowlist 唯讀命令免確認行為保留。
+- [x] 非 admin 觸發 terminal tool → 拒絕（沿用現有訊息）。
+- [x] 危險命令（rm -rf 等）→ 執行前封鎖，不送 sandbox。
+- [x] write op tool_call → 先確認往返才執行（沿用 home_context `confirm:pending`）。
+- [x] allowlist 唯讀命令免確認行為保留。
 
 ### Task 8：terminal viewer 摘要+連結接回；模糊意圖緩解
 **說明：** terminal tool 的最終總結沿用「精簡摘要 + deterministic viewer 連結」；
 system prompt 加一句緩解模糊口語（涉及系統/即時動作時優先用工具）。
 
 **Acceptance Criteria:**
-- [ ] terminal 執行後聊天仍是「一句話摘要 + 唯一真連結」，連結 deterministic 補上。
-- [ ] `home_context` 仍寫 `terminal_log:<task_id>` 指標。
-- [ ] 「whoami 看看」「現在幾點」類在新 prompt 下更傾向正確用工具（盡力，非硬性）。
-- [ ] `_strip_viewer_links` 入庫保護沿用。
+- [x] terminal 執行後聊天仍是「一句話摘要 + 唯一真連結」，連結 deterministic 補上。
+- [x] `home_context` 仍寫 `terminal_log:<task_id>` 指標。
+- [x] 「whoami 看看」「現在幾點」類在新 prompt 下更傾向正確用工具（盡力，非硬性）。
+- [x] `_strip_viewer_links` 入庫保護沿用。
 
 ### Task 9：文件與 spec
 **說明：** 更新 `openspec/specs/brain/spec.md`（planner 改 native tool calling）、
 記錄迴圈設計與工具註冊方式。
 
 **Acceptance Criteria:**
-- [ ] brain spec 反映 native tool-call 迴圈與安全把關位置。
-- [ ] 記錄 client 轉接差異（三家）與迭代上限等設計決定。
+- [x] brain spec 反映 native tool-call 迴圈與安全把關位置。
+- [x] 記錄 client 轉接差異（三家）與迭代上限等設計決定。
 
 ---
 
@@ -183,3 +183,5 @@ system prompt 加一句緩解模糊口語（涉及系統/即時動作時優先�
 |---|---|---|
 | 1.0 | 2026-06-13 | Initial proposal（接續 native-tool-calling spike 結論） |
 | 1.1 | 2026-06-13 | 定案：big bang 全遷、移除舉旗、迭代上限 5、tool 決策 temp=0 |
+| 1.2 | 2026-06-14 | 追加決定：terminal 撤 admin 閘與執行前確認（直接在沙箱跑、保留危險命令封鎖）；非沙箱寫入工具仍確認 |
+| 1.3 | 2026-06-14 | Archived — PR #10 merged。實機驗證：local tool 往返、全鏈路真實執行+prod 連結+無幻覺、安全把關（危險封鎖/非沙箱確認）、terminal 直跑（admin 與非 admin）。**未驗**：Claude/Gemini tool 路徑（無 key，fallback）、確認 resume 跨回合 e2e。殘留 planner 學舌另列 backlog。 |
