@@ -94,7 +94,7 @@ erDiagram
 | `id` | uuid | `gen_random_uuid()` | 主鍵 |
 | `user_id` | uuid | | 所屬用戶 |
 | `platform` | text | | `line` / `telegram` |
-| `status` | text | `'assembling'` | `assembling`/`processing`/`committed`/`done`/`cancelled`/`failed` |
+| `status` | text | `'assembling'` | `assembling`/`processing`/`done`/`delivered`/`cancelled`/`failed`（active = 前兩者） |
 | `silence_deadline` | timestamptz | | reset-on-each silence timer（每來一則 bump，~4s） |
 | `hard_deadline` | timestamptz | | 首訊息 + ceiling（~30s）封頂，防慢打字者餓死 |
 | `commit_passed` | boolean | `false` | 原子性 commit point：true 後新輸入開新 turn |

@@ -130,6 +130,21 @@ abort 是否真停（不信 200）。
 
 ---
 
+## 實作狀態 (2026-06-14)
+
+> AC 多為實機（LINE/TG/DB/MLX）驗證項，本機無法執行；以下標記程式碼完成度。
+
+- **Task 1（turn 組裝 + 序列化）**：✅ 程式碼完成。gateway turn 引擎
+  `gateway/internal/forwarder/turns.go`（assemble/dispatch/deliver）+ 改寫
+  `brain.go` 迴圈；DB 驅動 debounce、partial unique index 序列化。`go build` 通過。待實機驗收。
+- **Task 2（解耦交付 + commit point）**：✅ 解耦交付完成。brain `/turn` 非同步寫
+  `turns.result`、forwarder 投遞；`/chat` 與 `/turn` 共用 `_execute_conversation`。
+  commit_passed 於 done 置位。**commit-point 的「fold vs 新 turn」邊界邏輯併入 Task 3/4
+  的撤回偵測**（gateway 偵測 processing 中的後續訊息）。py_compile 通過。
+- **Task 3/4（cancel）**：brain 端輪詢 `cancel_requested` 的 cancel-aware 執行已就緒；
+  待補 gateway 撤回偵測（置 cancel_requested）與本地 streaming abort。
+- **Task 5 / 6**：未開始。
+
 ## Testing Notes
 
 - 無自動 runner；以 `podman compose` 起 gateway+brain，用 TG/LINE 實機對話驗收。

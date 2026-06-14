@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS turns (
     user_id           UUID NOT NULL,
     platform          TEXT NOT NULL,                    -- line | telegram
     status            TEXT NOT NULL DEFAULT 'assembling',
-                      -- assembling | processing | committed | done | cancelled | failed
+                      -- assembling | processing | done | delivered | cancelled | failed
+                      -- (active = assembling|processing；commit point 是 commit_passed 布林，非狀態)
     silence_deadline  TIMESTAMPTZ NOT NULL,             -- 每來一則訊息 bump（reset-on-each ~4s）
     hard_deadline     TIMESTAMPTZ NOT NULL,             -- 首訊息 + ceiling（~30s）封頂，防餓死
     commit_passed     BOOLEAN NOT NULL DEFAULT false,   -- 原子性：true 後新輸入開新 turn

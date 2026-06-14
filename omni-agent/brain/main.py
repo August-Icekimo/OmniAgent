@@ -5,6 +5,7 @@ import os
 import json
 import re
 import traceback
+import uuid
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -151,6 +152,14 @@ class BrainResponse(BaseModel):
     # 0 表示資料缺失，gateway 據此省略對應欄位。
     context_tokens: int = 0
     context_length: int = 0
+
+
+class TurnRequest(BaseModel):
+    """解耦 turn 請求：gateway 把一個使用者的 burst 組裝成多則訊息一次送入。"""
+    turn_id: str
+    user_id: str
+    platform: str
+    messages: list[StandardMessage]
 
 
 async def _terminal_log_cleanup_loop(app: FastAPI):
@@ -361,18 +370,183 @@ async def terminal_ws(ws: WebSocket, task_id: str, t: str | None = None):
             pass
 
 
+def _build_footer(model_used: str, context_tokens: int, context_length: int) -> str:
+    """解耦交付下由 brain 組裝 runtime footer（FOOTER_ENABLED=true 才啟用）。
+    turn 投遞時 gateway 直接送 turns.result，故 footer 需在此處附上（對齊舊
+    gateway buildFooter 行為）。"""
+    if os.getenv("FOOTER_ENABLED") != "true":
+        return ""
+    parts = []
+    if model_used and model_used != "unknown":
+        parts.append(model_used.rsplit("/", 1)[-1])
+    if context_length > 0 and context_tokens >= 0:
+        parts.append(f"{min(context_tokens * 100 // context_length, 100)}%")
+    if not parts:
+        return ""
+    return "\n\n— " + " · ".join(parts)
+
+
+def _empty_conv_result(reason: str, *, cancelled=False, multimodal_failed=False) -> dict:
+    return {
+        "cancelled": cancelled,
+        "multimodal_failed": multimodal_failed,
+        "reply_text": "",
+        "model_used": "",
+        "provider": "",
+        "routing_reason": reason,
+        "context_tokens": 0,
+        "context_length": 0,
+    }
+
+
+async def _execute_conversation(
+    *,
+    user_id: str,
+    platform: str,
+    source_message_id: str | None,
+    user_content: str,
+    attachment: dict | None = None,
+    confirmation_received: bool = False,
+    resume_messages=None,
+    resume_iterations: int = 0,
+    cancel_check=None,
+) -> dict:
+    """執行一輪對話核心（system prompt → 記憶 → graph → 持久化）。
+    /chat（單訊息）與 /turn（多訊息組裝）共用，確保兩條路徑行為一致。
+
+    cancel_check：可選 async callable，回 True 表示使用者撤回 → 取消進行中的
+    graph 任務（升級路徑 asyncio cancel 直接中止 SDK 呼叫；本地路徑見 local_client）。
+    """
+    router = app.state.router
+    soul_loader = app.state.soul_loader
+    short_term = app.state.short_term
+    long_term = app.state.long_term
+    pool = app.state.db_pool
+
+    # system prompt
+    try:
+        system_prompt = await soul_loader.render(user_id=user_id)
+    except Exception as e:
+        logger.error(f"SoulLoader failed: {e}")
+        system_prompt = "I am Cindy, a family AI assistant."
+
+    # 長期記憶召回
+    if pool:
+        memories = await long_term.recall(user_id, user_content)
+        if memories:
+            long_term_context = "\n\n## Long-term Memory\n以下為過去對話摘要：\n"
+            for m in memories:
+                long_term_context += f"- {m}\n"
+            system_prompt += long_term_context
+
+    # 短期記憶歷史
+    history = []
+    if pool:
+        history = await short_term.load(user_id, limit=5)
+
+    llm_messages = []
+    for h in history:
+        llm_messages.append(Message(role=Role(h['role']), content=h['content']))
+    llm_messages.append(Message(role=Role.USER, content=user_content))
+
+    # 確認往返恢復：用先前存下的對話（含待批准 tool_calls）取代本輪訊息。
+    resume_tools = bool(resume_messages and confirmation_received)
+    if resume_tools:
+        from agent.graph import deserialize_messages
+        graph_messages = deserialize_messages(resume_messages)
+    else:
+        graph_messages = llm_messages
+
+    state = {
+        "user_id": user_id,
+        "source_message_id": source_message_id,
+        "platform": platform,
+        "messages": graph_messages,
+        "system_prompt": system_prompt,
+        "model_router": router,
+        "selected_provider": None,
+        "routing_reason": None,
+        "attachment": attachment,
+        "confirmation_received": confirmation_received,
+        "resume_tools": resume_tools,
+        "tool_iterations": resume_iterations,
+    }
+
+    # cancel-aware 執行：graph 跑在 task 上，有 cancel_check 時定期輪詢撤回訊號。
+    graph_task = asyncio.create_task(app.state.graph.ainvoke(state))
+    if cancel_check is not None:
+        while True:
+            done, _ = await asyncio.wait({graph_task}, timeout=0.5)
+            if graph_task in done:
+                break
+            try:
+                if await cancel_check():
+                    graph_task.cancel()
+                    break
+            except Exception:
+                pass
+    try:
+        final_state = await graph_task
+    except asyncio.CancelledError:
+        logger.info(f"conversation cancelled (user={user_id})")
+        return _empty_conv_result("cancelled", cancelled=True)
+
+    # 多模態失敗（Phase 4D Honest Fallback）
+    if attachment and not final_state.get("final_reply"):
+        logger.error(f"Multimodal processing failed (user={user_id})")
+        return _empty_conv_result("multimodal_failure", multimodal_failed=True)
+
+    reply_text = final_state.get("final_reply", "Sorry, I encountered an internal error.")
+    provider_name = final_state.get("selected_provider") or router._default_provider
+    client = router._clients.get(provider_name)
+    model_name = client.model_name() if client else "unknown"
+
+    if pool and "upgrade_needed" not in reply_text:
+        # 舉旗 JSON / viewer 連結絕不入庫（歷史汙染會讓模型學舌）。
+        round_messages = [
+            {"role": "user", "content": user_content},
+            {"role": "assistant", "content": _strip_viewer_links(reply_text)},
+        ]
+        metadata = {
+            "model": model_name,
+            "provider": provider_name,
+            "routing_reason": final_state.get("routing_reason"),
+        }
+        asyncio.create_task(short_term.save(user_id, platform, round_messages, metadata))
+        asyncio.create_task(long_term.store(user_id, round_messages))
+
+    # 寫入型工具確認往返：存下待恢復的對話（含待批准 tool_calls）。
+    pending_tools = final_state.get("pending_tools")
+    if pool and pending_tools:
+        await pool.execute(
+            "INSERT INTO home_context (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            f"confirm:pending:{user_id}",
+            json.dumps(pending_tools),
+        )
+
+    usage = final_state.get("last_usage") or {}
+    context_tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
+
+    return {
+        "cancelled": False,
+        "multimodal_failed": False,
+        "reply_text": reply_text,
+        "model_used": model_name,
+        "provider": provider_name,
+        "routing_reason": final_state.get("routing_reason"),
+        "context_tokens": context_tokens,
+        "context_length": router.context_length(provider_name),
+    }
+
+
 @app.post("/chat", response_model=BrainResponse)
 async def chat(msg: StandardMessage):
     """接收 Gateway 轉發的訊息，透過 LangGraph 處理。"""
     if not msg.text and not msg.attachment:
         raise HTTPException(status_code=400, detail="Empty message text and no attachment")
 
-    router = app.state.router
-    soul_loader = app.state.soul_loader
-    short_term = app.state.short_term
-    long_term = app.state.long_term
     pool = app.state.db_pool
-    
+
     # 0. 狀態預設值
     confirmation_received = False
     resume_messages = None          # 確認後恢復執行的對話（含待批准的 tool_calls）
@@ -425,124 +599,151 @@ async def chat(msg: StandardMessage):
                 resume_iterations = pdata.get("tool_iterations", 0)
             await pool.execute("DELETE FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
 
-    # 3. SoulLoader 渲染 system prompt
-    try:
-        system_prompt = await soul_loader.render(user_id=msg.user_id)
-    except Exception as e:
-        logger.error(f"SoulLoader failed: {e}")
-        system_prompt = "I am Cindy, a family AI assistant."
-
-    # 4. 長期記憶召回
-    if pool:
-        memories = await long_term.recall(msg.user_id, msg.text)
-        if memories:
-            long_term_context = "\n\n## Long-term Memory\n以下為過去對話摘要：\n"
-            for m in memories:
-                long_term_context += f"- {m}\n"
-            system_prompt += long_term_context
-
-    # 5. 短期記憶載入歷史
-    history = []
-    if pool:
-        history = await short_term.load(msg.user_id, limit=5)
-
-    # 組合訊息
-    # Build user content: text, or hash placeholder when attachment-only,
-    # or both when a caption accompanies the attachment.
+    # 3-9. 組合 user content 後交由共用核心執行（與 /turn 同一條路徑）
     if msg.attachment:
         placeholder = _media_placeholder(msg.attachment)
         user_content = f"{msg.text} {placeholder}".strip() if msg.text else placeholder
     else:
         user_content = msg.text
 
-    llm_messages = []
-    for h in history:
-        llm_messages.append(Message(role=Role(h['role']), content=h['content']))
-    llm_messages.append(Message(role=Role.USER, content=user_content))
-
-    # 6. 執行 LangGraph
-    # 確認往返恢復：用先前存下的對話（含待批准的 tool_calls）取代本輪訊息，
-    # 並設 resume_tools 讓 planner 直接進工具節點執行已批准的 tool_calls。
-    resume_tools = bool(resume_messages and confirmation_received)
-    if resume_tools:
-        from agent.graph import deserialize_messages
-        graph_messages = deserialize_messages(resume_messages)
-    else:
-        graph_messages = llm_messages
-
-    state = {
-        "user_id": msg.user_id,
-        "source_message_id": msg.source_message_id,
-        "platform": msg.platform,
-        "messages": graph_messages,
-        "system_prompt": system_prompt,
-        "model_router": router,
-        "selected_provider": None,
-        "routing_reason": None,
-        "attachment": msg.attachment.model_dump() if msg.attachment else None,
-        "confirmation_received": confirmation_received,
-        "resume_tools": resume_tools,
-        "tool_iterations": resume_iterations,
-    }
-
     try:
-        final_state = await app.state.graph.ainvoke(state)
-        
-        # 7. 檢查多模態失敗回傳 (Phase 4D Honest Fallback)
-        if msg.attachment and not final_state.get("final_reply"):
-             # 此情況可能發生在所有 Gemini Provider 都失敗時
-             logger.error(f"Multimodal processing failed for message {msg.id}")
-             return BrainResponse(
-                 reply_text="我這邊看不到/聽不到,可以打字告訴我嗎?",
-                 model_used="fallback", provider="none",
-                 routing_reason="multimodal_failure"
-             )
+        result = await _execute_conversation(
+            user_id=msg.user_id,
+            platform=msg.platform,
+            source_message_id=msg.source_message_id,
+            user_content=user_content,
+            attachment=msg.attachment.model_dump() if msg.attachment else None,
+            confirmation_received=confirmation_received,
+            resume_messages=resume_messages,
+            resume_iterations=resume_iterations,
+        )
 
-        # 8. 儲存本輪對話 (含 Metadata)
-        reply_text = final_state.get("final_reply", "Sorry, I encountered an internal error.")
-        provider_name = final_state.get("selected_provider") or router._default_provider
-        client = router._clients.get(provider_name)
-        model_name = client.model_name() if client else "unknown"
-
-        if pool and "upgrade_needed" not in reply_text:
-            # 舉旗 JSON 絕不入庫——歷史汙染會讓後續模型學舌輸出原始 JSON。
-            # 同理 viewer 連結也不入庫：否則模型會仿造假連結（甚至沿用舊網域如
-            # localhost），把 [📄...](…/terminal/view/…) 從歷史學去亂貼。
-            round_messages = [
-                {"role": "user", "content": user_content},
-                {"role": "assistant", "content": _strip_viewer_links(reply_text)}
-            ]
-            metadata = {
-                "model": model_name,
-                "provider": provider_name,
-                "routing_reason": final_state.get("routing_reason")
-            }
-            asyncio.create_task(short_term.save(msg.user_id, msg.platform, round_messages, metadata))
-            asyncio.create_task(long_term.store(msg.user_id, round_messages))
-
-        # 9. 寫入型工具確認往返：tools_node 暫停並回了確認問句時，存下待恢復的
-        # 對話（含待批准的 tool_calls）；下一則訊息若同意即恢復執行（見開頭 confirm:pending）。
-        pending_tools = final_state.get("pending_tools")
-        if pool and pending_tools:
-            await pool.execute(
-                "INSERT INTO home_context (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                f"confirm:pending:{msg.user_id}",
-                json.dumps(pending_tools),
+        if result["multimodal_failed"]:
+            return BrainResponse(
+                reply_text="我這邊看不到/聽不到,可以打字告訴我嗎?",
+                model_used="fallback", provider="none",
+                routing_reason="multimodal_failure",
             )
 
-        usage = final_state.get("last_usage") or {}
-        context_tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
-
         return BrainResponse(
-            reply_text=reply_text + stt_echo,
-            model_used=model_name,
-            provider=provider_name,
-            routing_reason=final_state.get("routing_reason"),
-            context_tokens=context_tokens,
-            context_length=router.context_length(provider_name)
+            reply_text=result["reply_text"] + stt_echo,
+            model_used=result["model_used"],
+            provider=result["provider"],
+            routing_reason=result["routing_reason"],
+            context_tokens=result["context_tokens"],
+            context_length=result["context_length"],
         )
 
     except Exception as e:
         logger.error(f"Agent graph execution failed: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=502, detail=f"Agent error: {e}")
+
+
+@app.post("/turn", status_code=202)
+async def turn(req: TurnRequest):
+    """解耦交付：立即接受一個組裝好的 turn，背景處理後把結果寫回 turns.result，
+    由 gateway forwarder 的投遞階段送出（gateway 不阻塞，故可被中斷）。"""
+    asyncio.create_task(_process_turn(req))
+    return {"accepted": True, "turn_id": req.turn_id}
+
+
+async def _finish_turn(pool, turn_id: str, result: str, *, status: str):
+    """把 turn 的最終狀態寫回 DB。commit_passed 僅在正常完成（done）時置 true。
+    以 status='processing' 為條件，避免覆寫已被其他流程改動的 turn。"""
+    if not pool:
+        return
+    await pool.execute(
+        """
+        UPDATE turns
+        SET status = $2, result = $3, commit_passed = $4, updated_at = NOW()
+        WHERE id = $1 AND status = 'processing'
+        """,
+        uuid.UUID(turn_id), status, result or None, status == "done",
+    )
+
+
+async def _process_turn(req: TurnRequest):
+    """背景處理一個 turn：組裝多則訊息為單一 user turn → 共用核心 → 寫回 turns。"""
+    pool = app.state.db_pool
+    turn_id = req.turn_id
+    try:
+        # 1. 把 burst 的多則訊息收斂成單一 user turn（語音逐則 STT、文字串接）。
+        texts: list[str] = []
+        attachment_model = None
+        stt_echo = ""
+        for m in req.messages:
+            if m.message_type == "voice" and m.attachment and getattr(app.state, "stt_model", None):
+                stt = await _transcribe_voice_local(m.attachment, app.state.stt_model)
+                if stt.get("success"):
+                    texts.append(stt["transcript"])
+                    stt_echo = f"\n\n(🎙️ 聽寫：{stt['transcript']})"
+                    asyncio.create_task(_save_voice_transcript(
+                        pool, req.user_id, req.platform, m.source_message_id,
+                        stt["transcript"], m.attachment.local_path, m.attachment.duration_ms,
+                    ))
+                    continue
+                logger.warning(f"turn STT failed (turn={turn_id}): {stt.get('error')}")
+            if m.attachment and m.message_type != "voice":
+                # 多模態以 turn 內最後一個附件為準（v1 以文字為主，附件 best-effort）。
+                attachment_model = m.attachment
+                ph = _media_placeholder(m.attachment)
+                texts.append(f"{m.text} {ph}".strip() if m.text else ph)
+            elif m.text:
+                texts.append(m.text)
+
+        user_content = "\n".join(t for t in texts if t).strip()
+        if not user_content and not attachment_model:
+            await _finish_turn(pool, turn_id, "", status="failed")
+            return
+
+        # 2. 技能確認往返：使用者同意後恢復先前暫停的 tool_calls。
+        confirmation_received = False
+        resume_messages = None
+        resume_iterations = 0
+        if pool:
+            pending_check = await pool.fetchrow(
+                "SELECT value FROM home_context WHERE key = $1", f"confirm:pending:{req.user_id}")
+            if pending_check:
+                if any(w in user_content.lower() for w in ["好", "可以", "確認", "yes", "go"]):
+                    confirmation_received = True
+                    pdata = json.loads(pending_check["value"])
+                    resume_messages = pdata.get("messages")
+                    resume_iterations = pdata.get("tool_iterations", 0)
+                await pool.execute(
+                    "DELETE FROM home_context WHERE key = $1", f"confirm:pending:{req.user_id}")
+
+        # 3. cancel-on-withdrawal：輪詢 turns.cancel_requested（gateway 偵測到撤回時置位）。
+        async def cancel_check() -> bool:
+            if not pool:
+                return False
+            row = await pool.fetchrow("SELECT cancel_requested FROM turns WHERE id = $1", uuid.UUID(turn_id))
+            return bool(row and row["cancel_requested"])
+
+        result = await _execute_conversation(
+            user_id=req.user_id,
+            platform=req.platform,
+            source_message_id=req.messages[-1].source_message_id if req.messages else None,
+            user_content=user_content,
+            attachment=attachment_model.model_dump() if attachment_model else None,
+            confirmation_received=confirmation_received,
+            resume_messages=resume_messages,
+            resume_iterations=resume_iterations,
+            cancel_check=cancel_check,
+        )
+
+        if result["cancelled"]:
+            await _finish_turn(pool, turn_id, "", status="cancelled")
+            return
+        if result["multimodal_failed"]:
+            await _finish_turn(pool, turn_id, "我這邊看不到/聽不到,可以打字告訴我嗎?", status="done")
+            return
+
+        reply = result["reply_text"] + stt_echo + _build_footer(
+            result["model_used"], result["context_tokens"], result["context_length"])
+        await _finish_turn(pool, turn_id, reply, status="done")
+
+    except Exception as e:
+        logger.error(f"turn processing failed (turn={turn_id}): {e}")
+        logger.error(traceback.format_exc())
+        await _finish_turn(pool, turn_id, "", status="failed")
