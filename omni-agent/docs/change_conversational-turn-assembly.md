@@ -141,9 +141,22 @@ abort 是否真停（不信 200）。
   `turns.result`、forwarder 投遞；`/chat` 與 `/turn` 共用 `_execute_conversation`。
   commit_passed 於 done 置位。**commit-point 的「fold vs 新 turn」邊界邏輯併入 Task 3/4
   的撤回偵測**（gateway 偵測 processing 中的後續訊息）。py_compile 通過。
-- **Task 3/4（cancel）**：brain 端輪詢 `cancel_requested` 的 cancel-aware 執行已就緒；
-  待補 gateway 撤回偵測（置 cancel_requested）與本地 streaming abort。
-- **Task 5 / 6**：未開始。
+- **Task 3（升級路徑 cancel）**：✅ 程式碼完成。gateway 撤回偵測（processing 且
+  commit_passed=false 又有新訊息 → 置 cancel_requested，並釋回原訊息與更正重組成新
+  turn）；brain asyncio cancel 中止升級 SDK 呼叫。commit point 採保守設定（commit_passed
+  於 done 才置 true，故整個 processing 窗可取消）。`go build` 通過。
+- **Task 4（本地 streaming abort）**：✅ 程式碼完成（**待實機驗證**）。`local_client`
+  改 streaming、擷取 chatcmpl id、CancelledError 時 detached task POST
+  `/v1/requests/{id}/cancel`；串流 tool_calls 以 `_stream_tool_calls` 重組。
+  ⚠️ 實機須驗證：(a) chatcmpl id 是否對上 scheduler 真的停下生成（200 非證據）；
+  (b) gemma 串流 tool_calls 行為與非串流一致。py_compile 通過。
+- **Task 5（本地 prompt cache）**：⏳ 伺服器端設定，不在本 repo。Rapid-MLX 以
+  `--enable-prefix-cache` 啟用（chrysoberyl launchd plist 加旗、重啟），現為
+  `cache.enabled=false`。client 無 per-request cache 參數（引擎內部管理）。
+- **Task 6（LINE re-trigger ladder）**：◐ 部分完成。既有 postback 按鈕（re-trigger
+  元件）+ `claimPendingLineReply` 取件已接上 turn 引擎；**新增 burst 去重**（一陣訊息
+  只送一顆按鈕）。**待補**：ride-along（搭下一則 organic inbound）與 push 僅限
+  urgency-flag 兩段階梯；urgency flag 定義（與 Card 2 共用）。
 
 ## Testing Notes
 
