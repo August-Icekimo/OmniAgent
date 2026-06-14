@@ -145,14 +145,24 @@ abort 是否真停（不信 200）。
   commit_passed=false 又有新訊息 → 置 cancel_requested，並釋回原訊息與更正重組成新
   turn）；brain asyncio cancel 中止升級 SDK 呼叫。commit point 採保守設定（commit_passed
   於 done 才置 true，故整個 processing 窗可取消）。`go build` 通過。
-- **Task 4（本地 streaming abort）**：✅ 程式碼完成（**待實機驗證**）。`local_client`
-  改 streaming、擷取 chatcmpl id、CancelledError 時 detached task POST
-  `/v1/requests/{id}/cancel`；串流 tool_calls 以 `_stream_tool_calls` 重組。
-  ⚠️ 實機須驗證：(a) chatcmpl id 是否對上 scheduler 真的停下生成（200 非證據）；
-  (b) gemma 串流 tool_calls 行為與非串流一致。py_compile 通過。
-- **Task 5（本地 prompt cache）**：⏳ 伺服器端設定，不在本 repo。Rapid-MLX 以
-  `--enable-prefix-cache` 啟用（chrysoberyl launchd plist 加旗、重啟），現為
-  `cache.enabled=false`。client 無 per-request cache 參數（引擎內部管理）。
+- **Task 4（本地 streaming abort）**：✅ 程式碼完成 + **abort 機制已實機驗證**
+  （Rapid-MLX 0.7.3，2026-06-14）。`local_client` 改 streaming；CancelledError 時
+  `finally: await stream.close()` **關閉連線** → server `disconnect_guard` 偵測斷線 →
+  `Aborting orphaned MLLM request` → GPU 釋放（實測 8s 斷線即 CLEANUP、num_running→0）。
+  串流 tool_calls 以 `_stream_tool_calls` 重組。
+  ⚠️ 關鍵更正：`POST /v1/requests/{chatcmpl-id}/cancel` 端點**對串流請求無效**
+  （chatcmpl id 不對應 scheduler 內部 uuid，實測回 200 但生成跑到底）——已**移除**該呼叫，
+  改採連線關閉。仍待實機驗證：gemma 串流 tool_calls 行為與非串流一致。py_compile 通過。
+- **Task 5（本地 prompt cache）**：◐ 已在 chrysoberyl 啟用 `--enable-prefix-cache`
+  並重啟（plist 已改）。但實測效益有限：`/v1/status cache.enabled` 仍 false（batched
+  `--mllm` 模式不用的 legacy 欄位），同 prompt 連打 TTFT 僅 ~13% 改善。on-disk prefix
+  cache lifespan 有作用但非大幅。詳見記憶 [[ref_local_mlx_gemma4]]。
+- **Rapid-MLX 0.6.82 → 0.7.3 升級（2026-06-14，伺服器側）**：
+  - **model alias 改名** `gemma-4-26b` → `gemma-4-26b-4bit`：已更新 `.env` 與
+    `.env.example` 的 `MLX_MODEL`（舊 alias 0.7.3 直接 404，brain 會打不到 MLX）。
+  - **stop-token patch 不再需要**：0.7.3 `_get_stop_tokens` 改為四來源，實測 gemma
+    開放式回覆 `finish=stop` 乾淨收尾、無重複/`<turn|>` 殘留——上游已修，無需再打 patch。
+  - plist 重啟 SOP：bootout 後**務必 sleep 再 bootstrap**，否則 I/O error 不啟動。
 - **Task 6（LINE re-trigger ladder）**：◐ 部分完成。既有 postback 按鈕（re-trigger
   元件）+ `claimPendingLineReply` 取件已接上 turn 引擎；**新增 burst 去重**（一陣訊息
   只送一顆按鈕）。**待補**：ride-along（搭下一則 organic inbound）與 push 僅限

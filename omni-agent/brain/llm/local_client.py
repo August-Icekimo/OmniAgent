@@ -15,7 +15,6 @@ import logging
 import os
 import re
 
-import httpx
 from openai import AsyncOpenAI
 from .base import ModelClient, Message, LLMResponse, Role, ToolCall, ToolSpec
 
@@ -199,12 +198,11 @@ class LocalClient(ModelClient):
             # stop 序列只在純文字生成時套用；tool calling 模式不需要、避免干擾
             kwargs["stop"] = _STOP_SEQUENCES
 
-        # 串流：才能擷取首 chunk 的 chatcmpl id，供使用者撤回時呼叫 Rapid-MLX
-        # /v1/requests/{id}/cancel 真正中止執行中生成（Task 4，cancel-on-withdrawal）。
+        # 串流：使用者撤回時關閉連線即可中止本地生成（Rapid-MLX disconnect_guard
+        # 偵測斷線→abort，GPU 釋放）。見下方 except CancelledError（Task 4）。
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}
 
-        request_id = None
         content_parts: list[str] = []
         tool_acc: dict[int, dict] = {}
         finish_reason = ""
@@ -213,8 +211,6 @@ class LocalClient(ModelClient):
         stream = await self._client.chat.completions.create(**kwargs)
         try:
             async for chunk in stream:
-                if request_id is None and getattr(chunk, "id", None):
-                    request_id = chunk.id
                 if getattr(chunk, "usage", None):
                     usage = {
                         "input_tokens": chunk.usage.prompt_tokens,
@@ -242,10 +238,12 @@ class LocalClient(ModelClient):
                             if tcd.function.arguments:
                                 slot["args"] += tcd.function.arguments
         except asyncio.CancelledError:
-            # 使用者撤回：通知 Rapid-MLX 中止執行中的請求。detached task 確保
-            # abort 不被同一波取消連帶取消。注意：200 不保證真停，需實機驗證。
-            if request_id:
-                asyncio.create_task(self._abort_request(request_id))
+            # 使用者撤回：關閉串流連線即可中止生成。實測（Rapid-MLX 0.7.3）：
+            # client 斷線 → server disconnect_guard 偵測 → "Aborting orphaned MLLM
+            # request" → GPU 釋放。finally 的 stream.close() 負責關連線。
+            # 註：POST /v1/requests/{chatcmpl-id}/cancel 端點對串流請求無效——
+            # chatcmpl id 不對應 scheduler 內部 uuid（實測 200 但生成照跑到底），故不採用。
+            logger.info("local turn cancelled — closing stream to abort generation")
             raise
         finally:
             try:
@@ -272,18 +270,6 @@ class LocalClient(ModelClient):
             finish_reason=finish_reason or "",
             tool_calls=tool_calls,
         )
-
-    async def _abort_request(self, request_id: str) -> None:
-        """通知 Rapid-MLX 取消執行中的請求（POST /v1/requests/{id}/cancel）。
-        伺服器端回 cancelled:true 是無條件的、非中止成功證據——須以觀察到的
-        效果（生成停止）驗證（見 change doc Task 4 / 記憶 ref_local_mlx_gemma4）。"""
-        url = f"{self._base_url.rstrip('/')}/requests/{request_id}/cancel"
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as c:
-                r = await c.post(url)
-            logger.info("local abort %s -> HTTP %s", request_id, r.status_code)
-        except Exception as e:
-            logger.warning("local abort failed for %s: %s", request_id, e)
 
     def provider_name(self) -> str:
         return "local"
