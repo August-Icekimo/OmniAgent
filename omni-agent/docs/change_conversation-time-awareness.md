@@ -88,6 +88,20 @@ Cindy 回覆時會搞錯「現在」——實機看到模型自稱「現實時�
 
 ---
 
+## 實作狀態 (2026-06-14)
+
+> 三個 Task **程式碼完成、`py_compile` 通過**。AC 多為實機（看 system_prompt / 模型回覆）
+> 驗證項，**待 2026-06-15 另窗實機測**（使用者）。
+
+- **Task 1（Layer A now）**：`loader.render` 注入 `now`（容器-台北 `datetime.now()`，含星期），
+  `context.md.jinja` 新增 `## Now`（置動態區最前、非快取段）。並改 DB 失敗不再退回純靜態 →
+  now 仍會渲染。
+- **Task 2（Layer B gap-aware）**：`short_term.load` 每則附 `_ts`（該輪 `created_at`）；
+  `_execute_conversation` 以 `_TURN_GAP_MARK=30min` 門檻，僅在間隔超過時前綴
+  `[YYYY-MM-DD HH:MM]`；存回歷史 content 不含前綴（前綴只加在送模型的副本）。
+- **Task 3（TZ + stress_logs）**：DB `timestamptz` 一律 `.astimezone()`（無參數 → 容器本地台北，
+  免 zoneinfo/tzdata 相依）；stress_logs created_at 於 loader 先轉本地 → 模板顯示台北時間。
+
 ## Testing Notes
 
 - `podman compose up -d --build brain` 後，用 TG/LINE 或直接 `message_queue` 注入測試。
