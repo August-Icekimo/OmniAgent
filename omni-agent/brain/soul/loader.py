@@ -48,13 +48,25 @@ class SoulLoader:
             return "I am Cindy, a family AI assistant."
 
         dynamic_context = {}
+
+        # 權威「現在」：給模型時間錨點（修日期幻覺）。容器 TZ=Asia/Taipei，naive
+        # datetime.now() 即台北時間。放動態區（非快取段），不影響 SOUL prefix 命中。
+        _n = datetime.now()
+        _wd = "一二三四五六日"[_n.weekday()]
+        dynamic_context["now"] = f"{_n.strftime('%Y-%m-%d')}（週{_wd}）{_n.strftime('%H:%M')}（台北）"
+
         try:
             # Fetch stress logs
             async with self.pool.acquire() as conn:
                 stress_logs = await conn.fetch(
                     "SELECT level, action_taken, mood, created_at FROM stress_logs ORDER BY created_at DESC LIMIT 3"
                 )
-                dynamic_context["recent_stress_logs"] = [dict(log) for log in stress_logs]
+                # created_at 為 timestamptz（asyncpg 回 UTC-aware）→ 轉容器本地(台北)再顯示
+                sl = [dict(log) for log in stress_logs]
+                for s in sl:
+                    if s.get("created_at") is not None:
+                        s["created_at"] = s["created_at"].astimezone()
+                dynamic_context["recent_stress_logs"] = sl
 
                 # Fetch home_context (Family Pulse + Today Context + Memory Index)
                 rows = await conn.fetch(
@@ -70,8 +82,8 @@ class SoulLoader:
                         dynamic_context["memory_index"] = row['value']
 
         except Exception as e:
-            logger.error(f"Database error in SoulLoader: {e}. Falling back to static content.")
-            return static_content
+            # DB 失敗不致命：仍渲染 now（時間錨點）與已取得的內容，不退回純靜態。
+            logger.error(f"Database error in SoulLoader: {e}. Rendering with partial context.")
 
         try:
             template = self.jinja_env.get_template("context.md.jinja")

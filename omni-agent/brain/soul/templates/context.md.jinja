@@ -1,3 +1,8 @@
+{% if now %}
+## Now
+現在時間：{{ now }}
+{% endif %}
+
 {% if recent_stress_logs %}
 ## My Recent State
 {% for log in recent_stress_logs %}
