@@ -132,7 +132,23 @@ abort 是否真停（不信 200）。
 
 ## 實作狀態 (2026-06-14)
 
-> AC 多為實機（LINE/TG/DB/MLX）驗證項，本機無法執行；以下標記程式碼完成度。
+> 2026-06-14 已 `podman compose up --build` 實機跑過核心路徑（見「實機驗證」段）。
+
+### 實機驗證 (2026-06-14, podman 本機)
+- ✅ **turn 合併**：同一人 3 則 burst → **單一 turn（3 msgs）**、brain `/turn` 只被叫一次、
+  合併成單一回覆；lifecycle assembling→processing→done→delivered 正常。
+- ✅ **mid-burst 更正中斷**：turn processing 中注入更正 → gateway 置 cancel_requested →
+  brain log `conversation cancelled`（gemini SDK 呼叫被 asyncio cancel，**Task 3 升級路徑驗證**）→
+  原 turn `cancelled` → 原訊息+更正**重組成新 turn（2 msgs）**投遞。commit-point 行為成立。
+- ✅ **串流 tool_calls 不退化**：直打 `local_client`（0.7.3）→ `finish=tool_calls`、
+  `get_weather{'city':'台北'}` 正確重組；純文字 `finish=stop` 乾淨收尾。**Task 4 串流改造驗證**。
+- ✅ **Task 4 abort 機制**（先前直接對 server 驗）：關連線 → disconnect_guard → orphan abort → GPU 釋放。
+- ⚠️ **migration 無自動套用機制**：`compose.yml` 只把 `db/migrations` 掛到
+  `/docker-entrypoint-initdb.d`（**僅 fresh volume 跑一次**）。009 對既有 DB **需手動套用**
+  （`psql < db/migrations/009_*.sql`，本次已套）。專案缺增量 migration runner——部署時注意。
+- ◌ LINE re-trigger ladder、TG/LINE 真實投遞：未在本機驗（需真實 chat）。
+
+> 以下為各 Task 程式碼完成度。
 
 - **Task 1（turn 組裝 + 序列化）**：✅ 程式碼完成。gateway turn 引擎
   `gateway/internal/forwarder/turns.go`（assemble/dispatch/deliver）+ 改寫
