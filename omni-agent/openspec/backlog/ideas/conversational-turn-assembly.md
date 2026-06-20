@@ -1,14 +1,30 @@
 ---
 slug: conversational-turn-assembly
-status: idea
+status: resolved
 domain: brain
 size: L
 priority: P1
 created: 2026-06-13
 groomed: 2026-06-14
+resolved: 2026-06-20
 ---
 
 # Conversational Turn Assembly & Atomicity
+
+> **SHIPPED (PR #11, 2026-06-14)** — 歸檔變更見 `docs/archive/change_conversational-turn-assembly.md`。
+> Task 1–4 + Task 6（postback 按鈕 + burst 去重）落地並實機（真實 LINE/TG）驗證。
+> **殘留處置（2026-06-20 收斂）：**
+> - **Task 5（本地 prompt cache）= 收掉,blocked-upstream。** 2026-06-20 升 Rapid-MLX 0.7.41
+>   + 加 `--pin-system-prompt` 實證:`--mllm` 模式下 prefix cache 不 engage（cold 3.79s vs
+>   warm 4.02s,無效益）。新版 prefix-cache（PFlash）為 Qwen 專屬、Gemma 明確 OFF。瓶頸是
+>   `--mllm` serving 模式本身,非版本;唯一解是關 `--mllm`（失去 vision OCR,取捨另案）。
+>   現況 ~13%（legacy 量測）已是上限。見記憶 `ref_local_mlx_gemma4`。
+> - **Task 6 ride-along = 退場（won't-do,2026-06-20）。** 既有「取得答案」postback 按鈕已
+>   cover 主目標（滯留答案不丟失、可取回）;ride-along 只省一次點按,屬邊際打磨,且受 LINE
+>   reply-token 單次性限制——任何設計都得在「push 滯留答案」或「新訊息失去 token」間擇一付代價。
+>   價值/複雜度比不划算,不做。
+> - **唯一存活殘留:urgency-gated push + urgency flag 定義** → 併入
+>   `topic-threading-and-open-loops`（Card 2;urgency flag 本就需與其共用對齊,於該卡 propose 時一併定）。
 
 ## Why
 TG/LINE present as a single linear window and humans split one thought across
