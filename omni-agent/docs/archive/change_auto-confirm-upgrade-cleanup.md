@@ -113,3 +113,4 @@
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-06-20 | Initial proposal — 由 (B) 全拆 stress-escalation 收斂原 auto-confirm-upgrade-cleanup idea |
+| 1.1 | 2026-06-20 | Archived — implementation complete（commit ebbf9e7） |
