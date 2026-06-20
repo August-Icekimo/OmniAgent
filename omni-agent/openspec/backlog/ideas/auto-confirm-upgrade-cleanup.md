@@ -1,11 +1,21 @@
 ---
 slug: auto-confirm-upgrade-cleanup
-status: idea
+status: resolved
 domain: brain
 size: XS
 priority: P2
 created: 2026-06-10
+resolved: 2026-06-20
+resolved_by: docs/change_auto-confirm-upgrade-cleanup.md
 ---
+
+> **已解決（2026-06-20）。** 原標的函式 `auto_confirm_model_upgrade` 已於 PR #10
+> （commit `772f663`「移除升級舉旗」）整個刪除，下方第 1、2 點隨之消解、第 2 點
+> （metadata `model`）在新共用核心 `_execute_conversation` 已正確使用 `client.model_name()`。
+> 探索後發現真正問題是殘留的整條 stress-escalation 鏈路端到端壞掉（確認端是孤兒、
+> 升級無架構落點），故改以 **(B) 全拆** 收斂。實作見
+> [docs/change_auto-confirm-upgrade-cleanup.md](../../../docs/change_auto-confirm-upgrade-cleanup.md)。
+> 下方原始內容僅作歷史記錄，`admin_chats`/`target_chat` 等指示已過期。
 
 # auto_confirm_model_upgrade 殘餘清理
 

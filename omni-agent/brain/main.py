@@ -587,22 +587,7 @@ async def chat(msg: StandardMessage):
         else:
             logger.warning(f"Local STT failed: {stt_result.get('error')}, falling back to Gemini")
 
-    # 1. 處理特殊狀態：模型升級確認 (僅限 Admin)
-    # 此處簡化：假設所有進來的 UserID 都已在 Gateway 驗證過
-    if pool:
-        escalation_pending = await pool.fetchrow("SELECT value FROM home_context WHERE key = 'escalation:pending'")
-        if escalation_pending:
-            # 只有 Admin 才能確認。這裡我們先檢查是否為同意升級的關鍵字。
-            if any(word in msg.text.lower() for word in ["好", "可以", "升級", "yes", "ok"]):
-                target_model = json.loads(escalation_pending['value'])['target_model']
-                # router.set_default(target_model) # 假設 router 支援
-                await pool.execute("DELETE FROM home_context WHERE key = 'escalation:pending'")
-                return BrainResponse(
-                    reply_text=f"好的，大腦已經完成模型升級至 `{target_model}`，現在反應會更精確敏銳！",
-                    model_used=target_model, provider="escalated"
-                )
-
-    # 2. 技能確認回覆：使用者同意後，恢復執行先前暫停的 tool_calls
+    # 1. 技能確認回覆：使用者同意後，恢復執行先前暫停的 tool_calls
     if pool:
         pending_check = await pool.fetchrow("SELECT value FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
         if pending_check:
@@ -613,7 +598,7 @@ async def chat(msg: StandardMessage):
                 resume_iterations = pdata.get("tool_iterations", 0)
             await pool.execute("DELETE FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
 
-    # 3-9. 組合 user content 後交由共用核心執行（與 /turn 同一條路徑）
+    # 2. 組合 user content 後交由共用核心執行（與 /turn 同一條路徑）
     if msg.attachment:
         placeholder = _media_placeholder(msg.attachment)
         user_content = f"{msg.text} {placeholder}".strip() if msg.text else placeholder
