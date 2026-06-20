@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -42,6 +43,49 @@ type SendOptions struct {
 
 func (o *SendOptions) replyTokenUsable() bool {
 	return o != nil && o.ReplyToken != "" && time.Now().Unix() < o.ReplyTokenExpiresAt
+}
+
+// DeliveryError 區分「可重試」（網路層 / 5xx / 429）與「終局」（其餘 4xx、設定錯誤）的投遞失敗，
+// 供 forwarder 決定退避重試或進 dead-letter（undeliverable）。
+type DeliveryError struct {
+	StatusCode int   // 平台 HTTP status；0 表示傳輸層錯誤（無 HTTP 回應）
+	Retryable  bool  // 是否值得退避後重試
+	Err        error // 底層錯誤
+}
+
+func (e *DeliveryError) Error() string {
+	if e.StatusCode == 0 {
+		return fmt.Sprintf("delivery failed (network, retryable=%v): %v", e.Retryable, e.Err)
+	}
+	return fmt.Sprintf("delivery failed (status %d, retryable=%v): %v", e.StatusCode, e.Retryable, e.Err)
+}
+
+func (e *DeliveryError) Unwrap() error { return e.Err }
+
+// retryableStatus：429 與 5xx 視為暫時性可重試；其餘 4xx 為終局。
+func retryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= 500
+}
+
+// newHTTPDeliveryError 由平台回應 status 建構分類錯誤。
+func newHTTPDeliveryError(code int, body string) *DeliveryError {
+	return &DeliveryError{StatusCode: code, Retryable: retryableStatus(code),
+		Err: fmt.Errorf("API status %d: %s", code, body)}
+}
+
+// newNetworkDeliveryError：傳輸層錯誤（逾時、連線失敗等，無 HTTP 回應），預設可重試。
+func newNetworkDeliveryError(err error) *DeliveryError {
+	return &DeliveryError{StatusCode: 0, Retryable: true, Err: err}
+}
+
+// IsRetryable 從任意投遞錯誤萃取可重試判定。非 DeliveryError（如設定缺失、unsupported platform）
+// 保守視為終局（false），避免對結構性錯誤無限重試。
+func IsRetryable(err error) bool {
+	var de *DeliveryError
+	if errors.As(err, &de) {
+		return de.Retryable
+	}
+	return false
 }
 
 // SendReply delivers a text message back to the specified platform and user.
@@ -379,14 +423,14 @@ func postLineAPI(url string, payload any) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return newNetworkDeliveryError(err)
 	}
 	defer resp.Body.Close()
 
 	// loading/start 成功回 202 Accepted，其餘 API 回 200 — 2xx 一律視為成功
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("LINE API returned status %d: %s", resp.StatusCode, string(respBody))
+		return newHTTPDeliveryError(resp.StatusCode, string(respBody))
 	}
 
 	return nil
@@ -425,7 +469,7 @@ func sendTelegramMessage(chatID, text string, opts *SendOptions) error {
 		resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonBody))
 		if err != nil {
 			if firstErr == nil {
-				firstErr = err
+				firstErr = newNetworkDeliveryError(err)
 			}
 			continue
 		}
@@ -433,7 +477,7 @@ func sendTelegramMessage(chatID, text string, opts *SendOptions) error {
 			respBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if firstErr == nil {
-				firstErr = fmt.Errorf("Telegram API returned status %d: %s", resp.StatusCode, string(respBody))
+				firstErr = newHTTPDeliveryError(resp.StatusCode, string(respBody))
 			}
 			continue
 		}

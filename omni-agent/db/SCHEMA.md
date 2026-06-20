@@ -94,19 +94,22 @@ erDiagram
 | `id` | uuid | `gen_random_uuid()` | 主鍵 |
 | `user_id` | uuid | | 所屬用戶 |
 | `platform` | text | | `line` / `telegram` |
-| `status` | text | `'assembling'` | `assembling`/`processing`/`done`/`delivered`/`cancelled`/`failed`（active = 前兩者） |
+| `status` | text | `'assembling'` | `assembling`/`processing`/`done`/`delivered`/`cancelled`/`failed`/`undeliverable`（active = 前兩者；`undeliverable` = 投遞耗盡的 dead-letter，保留 result，010 新增） |
 | `silence_deadline` | timestamptz | | reset-on-each silence timer（每來一則 bump，~4s） |
 | `hard_deadline` | timestamptz | | 首訊息 + ceiling（~30s）封頂，防慢打字者餓死 |
 | `commit_passed` | boolean | `false` | 原子性 commit point：true 後新輸入開新 turn |
 | `cancel_requested` | boolean | `false` | withdrawal/supersede 訊號（brain 輪詢，所有路徑中斷） |
 | `result` | text | | 解耦交付：brain 寫回覆全文（含 footer），forwarder 投遞 |
+| `delivery_attempts` | int | `0` | （010）投遞已嘗試次數；達 5 仍失敗 → `undeliverable` |
+| `next_delivery_at` | timestamptz | | （010）投遞退避閘門：NULL=立即可投，未來時間=等到期才重試（指數 base 5s、上限 300s） |
 | `created_at` | timestamptz | `now()` | 建立時間 |
 | `updated_at` | timestamptz | `now()` | 狀態變更時間 |
 
 **索引**:
 - `turns_one_active_per_user`: UNIQUE `(user_id)` WHERE status IN ('assembling','processing')（per-user 序列化）
 - `turns_due`: `(silence_deadline)` WHERE status = 'assembling'（到期掃描）
-- `turns_deliverable`: `(updated_at)` WHERE status = 'done'（投遞掃描）
+- `turns_deliverable`: `(next_delivery_at NULLS FIRST, updated_at)` WHERE status = 'done'（投遞掃描，010 加退避閘門）
+- `turns_undeliverable`: `(updated_at)` WHERE status = 'undeliverable'（010；dead-letter / admin 摘要掃描）
 
 ### `stranger_knocks` — 陌生人訊息紀錄
 紀錄尚未綁定 `users` 的外部聯繫。

@@ -13,6 +13,7 @@ import (
 	"omni-agent/gateway/internal/messenger"
 	"omni-agent/gateway/internal/model"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,6 +22,20 @@ import (
 //   - ceiling：自首訊息起的硬上限，防慢打字者餓死。
 func turnSilenceSeconds() int { return envInt("TURN_SILENCE_SECONDS", 4) }
 func turnCeilingSeconds() int { return envInt("TURN_CEILING_SECONDS", 30) }
+
+// 投遞重試上限：達此次數仍失敗（或遇終局錯誤）→ 標 undeliverable（dead-letter）。
+const maxDeliveryAttempts = 5
+
+// deliveryBackoff 由「已嘗試次數」算下次重試的退避：指數 base 5s、上限 300s。
+// attempts=1→5s, 2→10s, 3→20s, 4→40s（attempts 達 maxDeliveryAttempts 時不再排程，改 undeliverable）。
+func deliveryBackoff(attempts int) time.Duration {
+	const baseSecs, capSecs = 5, 300
+	secs := baseSecs << (attempts - 1) // attempts >= 1
+	if secs <= 0 || secs > capSecs {
+		secs = capSecs
+	}
+	return time.Duration(secs) * time.Second
+}
 
 func envInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
@@ -215,8 +230,12 @@ func dispatchDueTurn(db *pgxpool.Pool, turnURL string) bool {
 	return true
 }
 
-// deliverDoneTurn 投遞一個 brain 已完成（status='done'、result 已寫）的 turn。
-// 用該 turn 最後一則訊息的 reply token / 平台資訊投遞；完成後標 delivered。
+// deliverDoneTurn 投遞一個 brain 已完成（status='done'、result 已寫）且已到退避期的 turn。
+// 用該 turn 最後一則訊息的 reply token / 平台資訊投遞。
+//   - 成功 → status='delivered'、message_queue done。
+//   - 失敗且可重試且未達上限 → 留 status='done'、排 next_delivery_at 退避（不標 message_queue done）。
+//   - 終局錯誤或達上限 → status='undeliverable'（保留 result）、message_queue failed、LINE 取件按鈕轉 error。
+// next_delivery_at 閘門確保失敗 turn 不緊迴圈、不阻塞其他 done turn。
 func deliverDoneTurn(db *pgxpool.Pool) bool {
 	ctx := context.Background()
 	tx, err := db.Begin(ctx)
@@ -226,14 +245,16 @@ func deliverDoneTurn(db *pgxpool.Pool) bool {
 	defer tx.Rollback(ctx)
 
 	var turnID, userID, platform, result string
+	var attempts int
 	err = tx.QueryRow(ctx, `
-		SELECT id, user_id::text, platform, COALESCE(result, '')
+		SELECT id, user_id::text, platform, COALESCE(result, ''), delivery_attempts
 		FROM turns
 		WHERE status = 'done'
-		ORDER BY updated_at ASC
+		  AND (next_delivery_at IS NULL OR NOW() >= next_delivery_at)
+		ORDER BY next_delivery_at ASC NULLS FIRST, updated_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
-	`).Scan(&turnID, &userID, &platform, &result)
+	`).Scan(&turnID, &userID, &platform, &result, &attempts)
 	if err != nil {
 		return false
 	}
@@ -253,33 +274,74 @@ func deliverDoneTurn(db *pgxpool.Pool) bool {
 	// 整個 turn 的輸入指示器收尾（Telegram）。
 	stopTurnTyping(db, ctx, turnID)
 
-	if result != "" {
-		replyText := result // brain 端已含 footer（解耦後 footer 由 brain 組裝，見 Task 2）
-
-		// 慢回應按鈕已送出：答案進快取，改由 postback 取件。
-		if claimPendingLineReply(db, ctx, &lastMsg, replyText) {
-			log.Printf("turn deliver: turn %s cached for LINE postback", turnID)
-		} else {
-			opts := &messenger.SendOptions{
-				ReplyToken:          lastMsg.ReplyToken,
-				ReplyTokenExpiresAt: lastMsg.ReplyTokenExpiresAt,
-				QuoteToken:          lastMsg.QuoteToken,
-			}
-			if platform == "telegram" {
-				opts.ReplyToMessageID = lastMsg.SourceMessageID
-			}
-			if err := messenger.SendReplyWithOptions(db, platform, userID, replyText, opts); err != nil {
-				log.Printf("turn deliver: send failed (turn=%s): %v", turnID, err)
-			}
-		}
-	} else {
+	// 空 result：無內容可投，直接收尾為 delivered（與舊行為一致）。
+	if result == "" {
 		log.Printf("turn deliver: empty result (turn=%s)", turnID)
+		markTurnDelivered(tx, ctx, turnID)
+		tx.Commit(ctx)
+		return true
 	}
 
-	_, _ = tx.Exec(ctx, "UPDATE turns SET status = 'delivered', updated_at = NOW() WHERE id = $1", turnID)
-	_, _ = tx.Exec(ctx, "UPDATE message_queue SET status = 'done' WHERE turn_id = $1", turnID)
+	// 慢回應按鈕已送出：答案進快取，改由 postback 取件（不經平台 API，視為投遞成功）。
+	if claimPendingLineReply(db, ctx, &lastMsg, result) {
+		log.Printf("turn deliver: turn %s cached for LINE postback", turnID)
+		markTurnDelivered(tx, ctx, turnID)
+		tx.Commit(ctx)
+		return true
+	}
+
+	// 直接投遞。重試（attempts>0）一律 push-only：清掉 LINE reply/quote token
+	//（單次使用、首次已消耗），改走 push；Telegram 照送（接受可能重複）。
+	opts := &messenger.SendOptions{
+		ReplyToken:          lastMsg.ReplyToken,
+		ReplyTokenExpiresAt: lastMsg.ReplyTokenExpiresAt,
+		QuoteToken:          lastMsg.QuoteToken,
+	}
+	if attempts > 0 {
+		opts.ReplyToken = ""
+		opts.QuoteToken = ""
+	}
+	if platform == "telegram" {
+		opts.ReplyToMessageID = lastMsg.SourceMessageID
+	}
+
+	sendErr := messenger.SendReplyWithOptions(db, platform, userID, result, opts)
+	if sendErr == nil {
+		markTurnDelivered(tx, ctx, turnID)
+		tx.Commit(ctx)
+		return true
+	}
+
+	// 投遞失敗：遞增嘗試次數，依分類決定退避重試或進 dead-letter。
+	attempts++
+	if !messenger.IsRetryable(sendErr) || attempts >= maxDeliveryAttempts {
+		log.Printf("turn deliver: giving up (turn=%s, attempts=%d, retryable=%v): %v",
+			turnID, attempts, messenger.IsRetryable(sendErr), sendErr)
+		_, _ = tx.Exec(ctx,
+			"UPDATE turns SET status = 'undeliverable', delivery_attempts = $2, updated_at = NOW() WHERE id = $1",
+			turnID, attempts)
+		_, _ = tx.Exec(ctx, "UPDATE message_queue SET status = 'failed' WHERE turn_id = $1", turnID)
+		failPendingLineReply(db, ctx, &lastMsg) // LINE 取件按鈕轉 error，避免永久等待
+		tx.Commit(ctx)
+		return true
+	}
+
+	backoff := deliveryBackoff(attempts)
+	log.Printf("turn deliver: retry scheduled (turn=%s, attempts=%d, in=%s): %v",
+		turnID, attempts, backoff, sendErr)
+	_, _ = tx.Exec(ctx, `
+		UPDATE turns
+		SET delivery_attempts = $2, next_delivery_at = NOW() + make_interval(secs => $3), updated_at = NOW()
+		WHERE id = $1
+	`, turnID, attempts, int(backoff.Seconds()))
 	tx.Commit(ctx)
 	return true
+}
+
+// markTurnDelivered 標投遞完成：turn delivered + 該 turn 訊息 done。
+func markTurnDelivered(tx pgx.Tx, ctx context.Context, turnID string) {
+	_, _ = tx.Exec(ctx, "UPDATE turns SET status = 'delivered', updated_at = NOW() WHERE id = $1", turnID)
+	_, _ = tx.Exec(ctx, "UPDATE message_queue SET status = 'done' WHERE turn_id = $1", turnID)
 }
 
 // failTurnLineReply 在 turn 失敗時，用最後一則訊息把該使用者的 LINE pending
