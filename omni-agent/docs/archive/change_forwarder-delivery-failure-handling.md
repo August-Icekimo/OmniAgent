@@ -160,3 +160,4 @@ forwarder 據此分流，不靠解析字串。網路錯誤無 status → Retryab
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-06-20 | Initial proposal — 投遞失敗退避重試 + undeliverable dead-letter + admin 摘要 |
+| 1.1 | 2026-06-20 | Archived — implementation complete（commit d5ac362，runtime e2e 實跑通過） |
