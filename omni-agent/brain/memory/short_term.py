@@ -80,19 +80,21 @@ class ShortTermMemory:
         try:
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT messages FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+                    "SELECT messages, created_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
                     user_id, limit
                 )
 
                 history = []
                 # Rows are newest first, we want them oldest first
                 for row in reversed(rows):
+                    # 每 row = 一輪對話；附上該輪時間（_ts）供 prompt 端做 gap-aware 標時。
+                    # created_at 為 timestamptz（asyncpg 回 UTC-aware）。
+                    round_ts = row['created_at']
                     for msg in row['messages']:
                         # jsonb[] elements may come back as strings
-                        if isinstance(msg, str):
-                            history.append(json.loads(msg))
-                        else:
-                            history.append(msg)
+                        m = json.loads(msg) if isinstance(msg, str) else dict(msg)
+                        m["_ts"] = round_ts
+                        history.append(m)
                 return history
         except Exception as e:
             logger.error(f"Failed to load short-term memory for user {user_id}: {e}")

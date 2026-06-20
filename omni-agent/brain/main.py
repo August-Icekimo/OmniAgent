@@ -6,6 +6,10 @@ import json
 import re
 import traceback
 import uuid
+from datetime import timedelta
+
+# 歷史時間戳的 gap 門檻：相鄰輪間隔超過此值才標時間（gap-aware，見 _execute_conversation）
+_TURN_GAP_MARK = timedelta(minutes=30)
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -444,9 +448,19 @@ async def _execute_conversation(
     if pool:
         history = await short_term.load(user_id, limit=5)
 
+    # 歷史相對時序（gap-aware）：相鄰顯示時間間隔 > 30 分鐘才在該則前綴時間標記，
+    # 給模型對話時間感而不洗版。標記只加在送模型的 content，不污染存回歷史的內容。
     llm_messages = []
+    prev_ts = None
     for h in history:
-        llm_messages.append(Message(role=Role(h['role']), content=h['content']))
+        content = h['content']
+        ts = h.get('_ts')
+        if ts is not None:
+            if prev_ts is None or (ts - prev_ts) > _TURN_GAP_MARK:
+                local_ts = ts.astimezone()  # UTC-aware → 容器本地(台北)
+                content = f"[{local_ts.strftime('%Y-%m-%d %H:%M')}] {content}"
+            prev_ts = ts
+        llm_messages.append(Message(role=Role(h['role']), content=content))
     llm_messages.append(Message(role=Role.USER, content=user_content))
 
     # 確認往返恢復：用先前存下的對話（含待批准 tool_calls）取代本輪訊息。
