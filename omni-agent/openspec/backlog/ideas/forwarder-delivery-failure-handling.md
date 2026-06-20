@@ -1,17 +1,16 @@
 ---
 slug: forwarder-delivery-failure-handling
-status: in-progress
+status: resolved
 domain: gateway
 size: S
 priority: P1
 created: 2026-06-10
-change: docs/change_forwarder-delivery-failure-handling.md
+resolved: 2026-06-20
+resolved_by: docs/archive/change_forwarder-delivery-failure-handling.md
 ---
 
-> **實作中（2026-06-20）。** 見 [docs/change_forwarder-delivery-failure-handling.md](../../../docs/change_forwarder-delivery-failure-handling.md)。
-> 注意：conversational-turn-assembly（PR #11）後，bug 已從原 `brain.go processNextMessage`
-> （已不存在）遷移到投遞階段 `turns.go deliverDoneTurn`——退避重試 + `undeliverable` dead-letter
-> + admin 摘要即在該處實作。設計決定：耗盡改 **admin 摘要**（非原 hint 的「推使用者錯誤通知」）。
+> **已解決（2026-06-20）。** 實作完成（commit `d5ac362`，runtime e2e 實跑通過），提案已移至 [docs/archive/change_forwarder-delivery-failure-handling.md](../../../docs/archive/change_forwarder-delivery-failure-handling.md)。
+> 注意：conversational-turn-assembly（PR #11）後，bug 已從原 `brain.go processNextMessage`（已不存在）遷移到投遞階段 `turns.go deliverDoneTurn`——退避重試 + `undeliverable` dead-letter + admin 摘要已在該處實作。
 
 # forwarder 投遞失敗仍標記 done — 訊息靜默丟失
 
