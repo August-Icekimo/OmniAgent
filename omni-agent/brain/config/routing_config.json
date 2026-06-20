@@ -29,7 +29,7 @@
     {
       "name": "image_input",
       "condition": "message_type == 'image'",
-      "provider": "gemini",
+      "provider": "local",
       "thinking_budget": 0,
       "priority": 100
     },

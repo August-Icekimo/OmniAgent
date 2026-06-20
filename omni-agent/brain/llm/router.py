@@ -40,10 +40,12 @@ class ModelRouter:
 
     def select_provider(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """根據上下文決定初始 provider。"""
-        # 0. 多模態強制路由至 Gemini API Key
-        #    sticker/animation 自 Phase 1 起改走 routing_rules（可路由至 local 視覺）
+        # 0. audio/video 強制 Gemini（claude 無 audio、local 音訊/視訊未接線）。
+        #    image 自 2026-06 起改走 routing_rules：local gemma（--mllm）具 vision，
+        #    image_input 規則導 local 試點，FileAnalyzer._vision_chat 內含 gemini 升級保底。
+        #    sticker/animation 自 Phase 1 起亦走 routing_rules。
         msg_type = context.get("message_type", "text")
-        if msg_type in ["image", "voice", "video"]:
+        if msg_type in ["voice", "video"]:
             return {"provider": "gemini", "reason": f"multimodal:{msg_type}"}
 
         # 1. 檢查規則匹配

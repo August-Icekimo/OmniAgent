@@ -93,40 +93,69 @@ class FileAnalyzer:
             logger.error(f"PDF extraction error: {e}")
             return "PDF 無法讀取，可能已加密或損壞。"
 
+    async def _vision_chat(self, content: list, *, caller: str) -> str:
+        """圖片視覺呼叫：規則路由（image → local gemma `--mllm` 視覺試點）+ local 回空或
+        被 max_tokens 硬截時升級 gemini 保底（比照 _perceive_image，但供 OCR / 視覺描述
+        等較長輸出使用，用 provider 預設 max_tokens 上限，local 截斷即升級）。
+        圖片 bytes 僅進本地；gemini 只在升級保底時才看到原圖。"""
+        decision = self.router.select_provider({"message_type": "image"})
+        logger.info(f"{caller}: routed to {decision['provider']} ({decision['reason']})")
+        response = await self.router.chat(
+            [Message(role=Role.USER, content=content)],
+            provider=decision["provider"],
+            caller=caller,
+        )
+
+        text = response.content.strip()
+        finish = getattr(response, "finish_reason", "")
+        if (not text or finish == "length") and response.provider != "gemini":
+            reason = "empty" if not text else "truncated"
+            logger.warning(
+                f"{caller}: provider {response.provider} returned {reason} content, escalating to gemini"
+            )
+            response = await self.router.chat(
+                [Message(role=Role.USER, content=content)],
+                provider="gemini",
+                caller=f"{caller}_escalated",
+            )
+        return response.content
+
     async def _analyze_image(self, path: str, mime_type: str, instruction: Optional[str]) -> str:
-        """使用 Gemini Flash 進行圖片分析 (Phase 4D 兩階段視覺流)。"""
+        """本地 gemma 視覺優先（gemini 升級保底）的兩階段視覺流（Phase 4D 框架）。
+
+        OCR 與視覺描述走 _vision_chat（local 試點 + 升級保底）；中間的「OCR 是否足夠」
+        評估為純文字 YES/NO 閘門，續用 gemini（圖片 bytes 不外送，僅送已萃取文字）。
+        """
         try:
             with open(path, "rb") as f:
                 image_bytes = f.read()
                 image_data = base64.b64encode(image_bytes).decode("utf-8")
 
-            # Stage 1: OCR Fast Path
+            # Stage 1: OCR Fast Path（local 試點，截斷/空升級 gemini）
             ocr_prompt = "請僅萃取圖片中的所有文字。如果沒有文字，請回傳 [EMPTY]。"
             ocr_content = [
                 {"type": "image", "mime_type": mime_type, "data": image_data},
                 {"type": "text", "text": ocr_prompt}
             ]
-            ocr_response = await self.router.chat([Message(role=Role.USER, content=ocr_content)], provider="gemini")
-            ocr_text = ocr_response.content.strip()
+            ocr_text = (await self._vision_chat(ocr_content, caller="image_ocr")).strip()
 
             # 判斷是否需要 Stage 2
             if ocr_text != "[EMPTY]" and ocr_text != "":
-                # 簡單評估 OCR 是否足以回答指令
+                # 簡單評估 OCR 是否足以回答指令（純文字閘門，續用 gemini）
                 eval_prompt = f"用戶指令：{instruction or '無'}\nOCR 萃取文字：\n{ocr_text}\n\n請問僅憑這些文字是否足以精確回答用戶指令？請回傳 YES 或 NO。"
                 eval_response = await self.router.chat([Message(role=Role.USER, content=eval_prompt)], provider="gemini")
                 if "YES" in eval_response.content.upper():
                     logger.info("Stage 1 OCR sufficient, skipping Stage 2.")
                     return f"[OCR 萃取結果]\n{ocr_text}"
 
-            # Stage 2: Multimodal Escalation
+            # Stage 2: Multimodal Escalation（local 試點，截斷/空升級 gemini）
             logger.info("Escalating to Stage 2 vision.")
             vision_prompt = instruction or "請詳細描述這張圖片的內容，並回答相關問題。"
             vision_content = [
                 {"type": "image", "mime_type": mime_type, "data": image_data},
                 {"type": "text", "text": vision_prompt}
             ]
-            vision_response = await self.router.chat([Message(role=Role.USER, content=vision_content)], provider="gemini")
-            return vision_response.content
+            return await self._vision_chat(vision_content, caller="image_vision")
         except Exception as e:
             logger.error(f"Image analysis error: {e}")
             return f"圖片分析失敗：{str(e)}"
