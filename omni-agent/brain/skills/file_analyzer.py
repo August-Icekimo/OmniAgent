@@ -10,9 +10,10 @@ from .tgs_converter import tgs_to_png
 
 logger = logging.getLogger("brain.skills.file_analyzer")
 
-# 貼圖/GIF 感知輸出很短（一句話描述），收緊 max_tokens 抑制 Gemma 4 碎念
-# （gemma#622），也讓 local 最壞情況延遲受控（100 tok @ ~34 tok/s ≈ 3s）
-PERCEPTION_MAX_TOKENS = 100
+# 貼圖/GIF 感知輸出宜短（一兩句），收緊 max_tokens 抑制 Gemma 4 碎念
+# （gemma#622），也讓 local 最壞情況延遲受控（160 tok @ ~34 tok/s ≈ 5s）。
+# 留到 160 是為了容得下貼圖上的文字（LINE 貼圖常帶對白/標語），避免讀字被硬截。
+PERCEPTION_MAX_TOKENS = 160
 
 class FileAnalyzer:
     """提供 PDF、圖片、Excel 的分析功能。"""
@@ -132,7 +133,7 @@ class FileAnalyzer:
                 image_data = base64.b64encode(image_bytes).decode("utf-8")
 
             # Stage 1: OCR Fast Path（local 試點，截斷/空升級 gemini）
-            ocr_prompt = "請僅萃取圖片中的所有文字。如果沒有文字，請回傳 [EMPTY]。"
+            ocr_prompt = "請依閱讀順序萃取圖片中的所有文字（含對白、說明、字幕、標題）。如果完全沒有文字，請只回傳 [EMPTY]。"
             ocr_content = [
                 {"type": "image", "mime_type": mime_type, "data": image_data},
                 {"type": "text", "text": ocr_prompt}
@@ -149,8 +150,17 @@ class FileAnalyzer:
                     return f"[OCR 萃取結果]\n{ocr_text}"
 
             # Stage 2: Multimodal Escalation（local 試點，截斷/空升級 gemini）
+            # 圖文整合：帶入 Stage 1 OCR 文字當 ground truth，並要求同時讀對白+結合畫面，
+            # 避免漫畫/截圖類「只描述畫面、漏掉對白」的圖文不合併。
             logger.info("Escalating to Stage 2 vision.")
-            vision_prompt = instruction or "請詳細描述這張圖片的內容，並回答相關問題。"
+            base_prompt = instruction or "請完整解讀這張圖片的內容並回答相關問題。"
+            integration_hint = (
+                "若圖中含文字（漫畫對白、截圖、海報、說明字幕等），請務必逐句讀出這些文字，"
+                "並與畫面情境結合後再回覆；不可只描述畫面而忽略文字，也不可只列文字而忽略畫面。"
+            )
+            if ocr_text and ocr_text != "[EMPTY]":
+                integration_hint += f"\n\n（以下為已辨識到的圖中文字，供對照、切勿遺漏）：\n{ocr_text}"
+            vision_prompt = f"{base_prompt}\n\n{integration_hint}"
             vision_content = [
                 {"type": "image", "mime_type": mime_type, "data": image_data},
                 {"type": "text", "text": vision_prompt}
@@ -273,7 +283,11 @@ class FileAnalyzer:
             with open(path, "rb") as f:
                 image_data = base64.b64encode(f.read()).decode("utf-8")
 
-            prompt = "這是貼圖，請描述其情緒、物體或意圖。請以簡短的一句話回傳，格式如：[sticker: 某某動作，表達某某心情]。"
+            prompt = (
+                "這是一張貼圖。請描述它的情緒、動作或意圖；"
+                "若貼圖上有文字（對白、標語、字幕），務必原樣讀出並一起寫進描述，不可只描述畫面而漏掉文字。"
+                "請以簡短一兩句回傳，格式如：[sticker: 某某動作，表達某某心情；文字「…」]（無文字則省略文字部分）。"
+            )
             content = [
                 {"type": "image", "mime_type": mime_type, "data": image_data},
                 {"type": "text", "text": prompt}
@@ -316,7 +330,10 @@ class FileAnalyzer:
             with open(path, "rb") as f:
                 image_data = base64.b64encode(f.read()).decode("utf-8")
 
-            prompt = "這是 GIF 動畫的首幀，全貌可能不同。請描述此幀的內容並推測動畫意圖。"
+            prompt = (
+                "這是 GIF 動畫的首幀，全貌可能不同。請描述此幀的內容並推測動畫意圖；"
+                "若畫面上有文字（對白、標語、字幕），務必一併讀出寫進描述。"
+            )
             content = [
                 {"type": "image", "mime_type": mime_type, "data": image_data},
                 {"type": "text", "text": prompt}
