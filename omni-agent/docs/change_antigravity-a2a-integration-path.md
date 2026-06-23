@@ -62,12 +62,12 @@ resolved）：**ADK 2.0（`google-adk`）自建 specialist agent，透過 A2A pr
 （**不掛 `.env`**）。新增 `a2a-workspace` volume，brain 與 agy 同掛。
 
 **Acceptance Criteria:**
-- [ ] `agy` service：`read_only: true`、`tmpfs: /tmp`、`mem_limit`、`pids_limit`、
+- [x] `agy` service：`read_only: true`、`tmpfs: /tmp`、`mem_limit`、`pids_limit`、
       `cpu_shares`、`security_opt: no-new-privileges:true`、無 `env_file`。
-- [ ] 僅注入單一 secret：`GEMINI_API_KEY`（或等義）經 `environment` 由 `.env` 取值。
-- [ ] 不發布 host port；brain 經內網 `http://agy:<port>` 可達。
-- [ ] `a2a-workspace` volume 宣告並同掛於 brain 與 agy。
-- [ ] `podman compose up -d agy` 啟動成功，health 通過。
+- [x] 僅注入單一 secret：`GEMINI_API_KEY`（或等義）經 `environment` 由 `.env` 取值。
+- [x] 不發布 host port；brain 經內網 `http://agy:<port>` 可達。
+- [x] `a2a-workspace` volume 宣告並同掛於 brain 與 agy。
+- [x] `podman compose up -d agy` 啟動成功，health 通過。
 
 ### Task 2：ADK 2.0 specialist agent + A2A server（Goal 1）
 **說明：** 在 `agy/` 用 `google-adk` 2.x 建一個 **長文摘要** specialist agent，
@@ -76,11 +76,11 @@ resolved）：**ADK 2.0（`google-adk`）自建 specialist agent，透過 A2A pr
 摘要結果回傳（必要時長產物寫回 `a2a-workspace`）。
 
 **Acceptance Criteria:**
-- [ ] AGY 啟動一個 a2a-sdk FastAPI A2A server，暴露標準 A2A endpoint。
-- [ ] Agent Card（`agent.json` / well-known endpoint）宣告「長文摘要」能力。
-- [ ] specialist agent 用 ADK 2.0 + Gemini API Key 對長文產出摘要。
-- [ ] 以 curl/script 直接送一個摘要 task → 收到結構化結果（不經 brain 亦可驗）。
-- [ ] 缺 API Key 時啟動失敗訊息清楚（不靜默）。
+- [x] AGY 啟動一個 a2a-sdk FastAPI A2A server，暴露標準 A2A endpoint。
+- [x] Agent Card（`agent.json` / well-known endpoint）宣告「長文摘要」能力。
+- [x] specialist agent 用 ADK 2.0 + Gemini API Key 對長文產出摘要。
+- [x] 以 curl/script 直接送一個摘要 task → 收到結構化結果（不經 brain 亦可驗）。
+- [x] 缺 API Key 時啟動失敗訊息清楚（不靜默）。
 
 ### Task 3：Brain A2A client + 委派 tool（D2，Goal 2）
 **說明：** 在 brain 新增 A2A client（`a2a-sdk` client 或 ADK A2A client），
