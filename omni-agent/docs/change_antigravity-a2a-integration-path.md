@@ -108,15 +108,19 @@ resolved）：**ADK 2.0（`google-adk`）自建 specialist agent，透過 A2A pr
 
 ### Task 5：429 circuit breaker（D3，完整實作）
 **說明：** AGY 的 API Key 層遇 429（Free Tier 額度耗盡）時，啟動 circuit breaker：
-任務暫停 5hr → 屆時重試，並通知 admin。狀態落 DB（crash-safe，對齊 turns 設計），
-breaker 開啟期間新委派直接回降級訊息，不打 Gemini。
+任務暫停 5hr → 屆時重試，並通知 admin。狀態落 DB（crash-safe），breaker 開啟期間
+新委派直接回降級訊息，不打 Gemini。
+
+> **實作決定（無 migration）**：狀態存於既有 `home_context` kv 表（key=`agy:circuit_breaker`，
+> jsonb value），沿用 router 對 quota cooldown 的同一模式 → crash-safe 且**不需新 schema**。
+> admin 通知沿用 Telegram admin 推播（`SELECT chat_id ... WHERE role='admin'`，同 proactive）。
 
 **Acceptance Criteria:**
-- [ ] 偵測 Gemini API Key 429 → 開啟 breaker，記錄 `open_until = NOW()+5hr`（落 DB）。
-- [ ] breaker 開啟期間，新的 `delegate_to_specialist` 委派直接回降級訊息、不送 AGY。
-- [ ] 屆 `open_until` 自動半開重試；成功則關閉 breaker。
-- [ ] breaker 開啟時通知 admin（沿用既有 admin 通知管道）。
-- [ ] breaker 狀態 crash-safe（行程重啟後沿用 DB 狀態，不誤判已關閉）。
+- [x] 偵測 Gemini API Key 429 → 開啟 breaker，記錄 `open_until = NOW()+5hr`（落 DB）。
+- [x] breaker 開啟期間，新的 `delegate_to_specialist` 委派直接回降級訊息、不送 AGY。
+- [x] 屆 `open_until` 自動半開重試；成功則關閉 breaker。
+- [x] breaker 開啟時通知 admin（沿用既有 admin 通知管道）。
+- [x] breaker 狀態 crash-safe（行程重啟後沿用 DB 狀態，不誤判已關閉）。
 
 ### Task 6：端到端驗證（Goal 1+2+3）
 **說明：** 完整跑一次：使用者請求 → planner 選 `delegate_to_specialist` →

@@ -144,7 +144,18 @@ async def execute_tool(name: str, args: dict, model_router) -> dict:
                 logger.warning("de-id 取名單失敗，改以原文委派: %s", e)
         else:
             logger.warning("無 DB pool，跳過 de-id（委派內容未遮蔽）")
-        return await client.delegate(task)
+        # 429 circuit breaker：open 期間直接降級、不送 AGY（D3）。
+        from skills import specialist_breaker as breaker
+        allowed, half_open = await breaker.allow(pool)
+        if not allowed:
+            return {"success": False, "error": "specialist 暫時休息中（API 額度保護），稍後再試"}
+        result = await client.delegate(task)
+        if result.get("success"):
+            if half_open:
+                await breaker.close(pool)  # 試打成功 → 關閉 breaker
+        elif breaker.is_quota_error(result.get("error", "")):
+            await breaker.trip(pool, reason=result.get("error", ""))  # 偵測 429 → 開啟
+        return result
 
     if name == "web_search":
         from skills.web_search import get_web_search_provider

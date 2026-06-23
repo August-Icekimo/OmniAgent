@@ -80,10 +80,18 @@ class SpecialistClient:
                 client = ClientFactory(ClientConfig(httpx_client=hx)).create(card)
                 msg = create_text_message_object(content=task)
                 final = ""
+                status_err = ""  # 失敗時的狀態訊息（供上層分類 429 等）
                 async for event in client.send_message(msg):
                     # event 可能是 (Task, update) tuple 或 Message
                     if isinstance(event, tuple):
                         a2a_task, _ = event
+                        st = getattr(a2a_task, "status", None)
+                        if st is not None:
+                            sm = getattr(st, "message", None)
+                            if sm:
+                                mt = _extract_text(sm)
+                                if mt:
+                                    status_err = mt
                         for art in (getattr(a2a_task, "artifacts", None) or []):
                             txt = _extract_text(art)
                             if txt:
@@ -93,7 +101,8 @@ class SpecialistClient:
                         if txt:
                             final = txt
                 if not final.strip():
-                    return {"success": False, "error": "specialist 回傳空結果"}
+                    # 把狀態訊息原文回傳，讓 breaker 能分類 429（額度）等失敗。
+                    return {"success": False, "error": status_err or "specialist 回傳空結果"}
                 return {"success": True, "data": {"result": final.strip()}}
         except (httpx.TimeoutException, TimeoutError):
             logger.warning("specialist 委派逾時 (%ss)", _DELEGATE_TIMEOUT)
