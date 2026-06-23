@@ -166,6 +166,69 @@ class TurnRequest(BaseModel):
     messages: list[StandardMessage]
 
 
+# 一個 turn 在 brain 端的最長處理時間。逾時即視為卡死（多為不可取消的阻塞 op，
+# 如 Gemini 影片上傳的同步網路讀），標 failed 釋放佇列——否則 gateway 的 per-user
+# 序列化會讓該使用者(跨平台)後續所有訊息永久卡 pending。
+def _turn_processing_timeout() -> int:
+    return int(os.getenv("TURN_PROCESSING_TIMEOUT", "300"))
+
+
+# 收割門檻：processing 超過此秒數仍未收尾的 turn 視為孤兒（行程重啟丟失 in-memory
+# task、或逾時保護本身也被不可取消的 op 拖住）。須 > TURN_PROCESSING_TIMEOUT，
+# 讓正常逾時保護先生效，收割器只當最後防線。
+def _turn_stale_seconds() -> int:
+    return int(os.getenv("TURN_STALE_SECONDS", "600"))
+
+
+def _turn_reap_interval() -> int:
+    return int(os.getenv("TURN_REAP_INTERVAL", "120"))
+
+
+async def _reap_stale_turns(pool) -> int:
+    """把卡在 processing 過久的 turn 標 failed，並丟棄其訊息（status=failed）。
+
+    丟棄而非釋回的理由：卡死多源於某則「毒訊息」(如壞影片) 觸發不可取消的阻塞；
+    釋回會被重新組裝、再次觸發同樣卡死 → 無限迴圈。標 failed 即解除 gateway 對
+    該使用者的 per-user 序列化封鎖，後續新訊息可正常開 turn。
+    """
+    if not pool:
+        return 0
+    rows = await pool.fetch(
+        """
+        UPDATE turns
+        SET status = 'failed', updated_at = NOW()
+        WHERE status = 'processing'
+          AND updated_at < NOW() - make_interval(secs => $1)
+        RETURNING id
+        """,
+        _turn_stale_seconds(),
+    )
+    if not rows:
+        return 0
+    ids = [r["id"] for r in rows]
+    await pool.execute(
+        "UPDATE message_queue SET status = 'failed' WHERE turn_id = ANY($1::uuid[])", ids
+    )
+    logger.warning(f"Reaped {len(ids)} stale processing turn(s): {[str(i) for i in ids]}")
+    return len(ids)
+
+
+async def _stale_turn_reaper_loop(app: FastAPI):
+    """孤兒 turn 收割：啟動跑一次（回收行程重啟丟失的 in-flight turn），之後週期重跑。"""
+    interval = _turn_reap_interval()
+    while True:
+        try:
+            await _reap_stale_turns(app.state.db_pool)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — 收割失敗不可拖垮服務
+            logger.warning(f"Stale turn reaper failed: {e}")
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            raise
+
+
 async def _terminal_log_cleanup_loop(app: FastAPI):
     """終端機 log 保留期清理：啟動跑一次，之後每日重跑。
 
@@ -261,11 +324,18 @@ async def lifespan(app: FastAPI):
         _terminal_log_cleanup_loop(app)
     )
 
+    # 啟動孤兒 turn 收割（啟動先回收行程重啟丟失的 in-flight turn + 週期防線）
+    if app.state.db_pool:
+        app.state.stale_turn_reaper_task = asyncio.create_task(
+            _stale_turn_reaper_loop(app)
+        )
+
     yield
 
-    task = getattr(app.state, "terminal_cleanup_task", None)
-    if task:
-        task.cancel()
+    for attr in ("terminal_cleanup_task", "stale_turn_reaper_task"):
+        task = getattr(app.state, attr, None)
+        if task:
+            task.cancel()
 
     if app.state.db_pool:
         await app.state.db_pool.close()
@@ -662,7 +732,40 @@ async def _finish_turn(pool, turn_id: str, result: str, *, status: str):
     )
 
 
+async def _fail_turn_drop_messages(pool, turn_id: str):
+    """逾時/卡死時收尾：turn 標 failed，並丟棄其訊息（不釋回，避免重組再次觸發卡死）。
+    僅在 turn 仍 processing 時生效，避免覆寫已正常收尾的 turn。"""
+    if not pool:
+        return
+    res = await pool.execute(
+        "UPDATE turns SET status = 'failed', updated_at = NOW() WHERE id = $1 AND status = 'processing'",
+        uuid.UUID(turn_id),
+    )
+    if res.split()[-1] == "0":  # asyncpg 回傳 "UPDATE N"
+        return  # 已被正常流程收尾，勿動其訊息
+    await pool.execute(
+        "UPDATE message_queue SET status = 'failed' WHERE turn_id = $1", uuid.UUID(turn_id)
+    )
+
+
 async def _process_turn(req: TurnRequest):
+    """背景處理一個 turn，套用硬逾時保護。
+
+    用 abandon-pattern（wait + timeout，逾時不 await 取消）而非 wait_for：若核心卡在
+    不可取消的阻塞 op（如 Gemini 影片同步上傳），wait_for 會在等待取消完成時一起卡住。
+    這裡逾時即放生背景 task、直接標 turn failed 釋放佇列，確保不被同一個 op 拖死。
+    """
+    pool = app.state.db_pool
+    turn_id = req.turn_id
+    core = asyncio.create_task(_process_turn_core(req))
+    done, _ = await asyncio.wait({core}, timeout=_turn_processing_timeout())
+    if core not in done:
+        core.cancel()  # best-effort；不 await，避免被不可取消的 op 拖住
+        logger.error(f"turn processing timed out (turn={turn_id}) — failing to unblock queue")
+        await _fail_turn_drop_messages(pool, turn_id)
+
+
+async def _process_turn_core(req: TurnRequest):
     """背景處理一個 turn：組裝多則訊息為單一 user turn → 共用核心 → 寫回 turns。"""
     pool = app.state.db_pool
     turn_id = req.turn_id
