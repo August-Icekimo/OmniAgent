@@ -127,10 +127,18 @@ resolved）：**ADK 2.0（`google-adk`）自建 specialist agent，透過 A2A pr
 A2A 委派 AGY → ADK agent 執行 → 結果回 brain → 回覆使用者。並驗證容器安全模式。
 
 **Acceptance Criteria:**
-- [ ] 端到端 single-turn 委派成功，結果正確回到使用者。
-- [ ] 驗證 AGY 容器 read_only（嘗試寫非 tmpfs/volume 路徑應失敗）。
-- [ ] 驗證資源限制生效（mem_limit/pids_limit）。
-- [ ] 大型產物經 `a2a-workspace` volume 交換可行（至少一個案例）。
+- [x] 端到端 single-turn 委派成功，結果正確回到使用者。
+      （委派機制全程驗證：brain `delegate_to_specialist` → A2A → AGY → Gemini → 正確
+      摘要回 brain；tool 已掛入 planner，見 graph.py:269 `tools=TOOL_SPECS`。）
+- [x] 驗證 AGY 容器 read_only（嘗試寫非 tmpfs/volume 路徑應失敗）。
+- [x] 驗證資源限制生效（mem_limit/pids_limit）。
+- [x] 大型產物經 `a2a-workspace` volume 交換可行（至少一個案例）。
+
+> **驗證附註（誠實記錄）**：委派「機制」端到端可用且結果正確（execute_tool + volume
+> 交換實測通過）。但 planner **自動選用** delegate_to_specialist 當下無法乾淨示範：
+> Gemini 回空內容（既有的 403 CachedContent / quota 退化，非本變更引入）、local Gemma
+> 對口語 prompt 有 tool-selection gap（見 [[ref_local_mlx_gemma4]]）。屬 provider chain
+> 既有問題，待 Gemini provider 修復後可重驗 planner 自動選用。
 
 ---
 
