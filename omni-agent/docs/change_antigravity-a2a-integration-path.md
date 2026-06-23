@@ -19,8 +19,10 @@ resolved）：**ADK 2.0（`google-adk`）自建 specialist agent，透過 A2A pr
 
 外部前提已查證（2026-06-23）：
 - `google-adk` 2.x stable（GA 2026-05-19，PyPI v2.2.0），含 Task API + 原生 A2A。
-- A2A 官方 Python 套件為 **`a2a-sdk`**（`a2aproject/a2a-python`，v1.1.0，
-  spec 1.0），內建 FastAPI server 與 PostgreSQL backend 整合。
+- A2A 官方 Python 套件為 **`a2a-sdk`**。⚠️ 實作期修正（2026-06-23）：google-adk
+  2.3.0 的 `[a2a]` extra 釘 `a2a-sdk>=0.3.4,<0.4`；最新 `a2a-sdk 1.1.0` 改寫 server
+  API（移除 `a2a.server.apps`）與 ADK 的 `to_a2a` 不相容。故實際採 **a2a-sdk 0.3.x**
+  （`[http-server]` extra 提供 sse-starlette），用 ADK 原生 A2A 橋，非 1.1.0。
 - 容器隔離沿用現有 `sandbox` service 成功先例（[compose.yml](../compose.yml)）。
 
 ## Scope
@@ -90,19 +92,19 @@ resolved）：**ADK 2.0（`google-adk`）自建 specialist agent，透過 A2A pr
 `AGY_A2A_URL` 經環境變數設定（仿 `SANDBOX_URL`）。
 
 **Acceptance Criteria:**
-- [ ] `delegate_to_specialist` ToolSpec 註冊，planner 可選用。
-- [ ] single-turn 委派：brain 送 task → AGY 執行 → brain 收回結果字串。
-- [ ] `AGY_A2A_URL` 未設定時 tool 回明確錯誤、不 crash（仿 terminal 的 SANDBOX_URL 缺失處理）。
-- [ ] AGY 無回應/逾時時 brain 端有 timeout 與降級訊息（不卡死 turn — 對齊既有 turn 逾時保護）。
+- [x] `delegate_to_specialist` ToolSpec 註冊，planner 可選用。
+- [x] single-turn 委派：brain 送 task → AGY 執行 → brain 收回結果字串。
+- [x] `AGY_A2A_URL` 未設定時 tool 回明確錯誤、不 crash（仿 terminal 的 SANDBOX_URL 缺失處理）。
+- [x] AGY 無回應/逾時時 brain 端有 timeout 與降級訊息（不卡死 turn — 對齊既有 turn 逾時保護）。
 
 ### Task 4：De-identification 與 auth 注入（D1/D3）
 **說明：** Brain 在送任務前對任務內容做 people-memory 去識別化（容器邊界即隱私
 邊界，AGY 永不接觸 people memory）。確認 API Key 僅存在於 AGY 容器 env、不入 log。
 
 **Acceptance Criteria:**
-- [ ] 委派前對任務 payload 做去識別化（家人姓名/識別資訊不外送 AGY）。
-- [ ] AGY 容器 `env` 僅含注入的單一 API Key，無 DB credential / OAuth token。
-- [ ] API Key 不出現在 brain/agy 任何 log 輸出。
+- [x] 委派前對任務 payload 做去識別化（家人姓名/識別資訊不外送 AGY）。
+- [x] AGY 容器 `env` 僅含注入的單一 API Key，無 DB credential / OAuth token。
+- [x] API Key 不出現在 brain/agy 任何 log 輸出。
 
 ### Task 5：429 circuit breaker（D3，完整實作）
 **說明：** AGY 的 API Key 層遇 429（Free Tier 額度耗盡）時，啟動 circuit breaker：
