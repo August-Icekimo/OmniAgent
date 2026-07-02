@@ -106,6 +106,12 @@ resolved）：**ADK 2.0（`google-adk`）自建 specialist agent，透過 A2A pr
 - [x] AGY 容器 `env` 僅含注入的單一 API Key，無 DB credential / OAuth token。
 - [x] API Key 不出現在 brain/agy 任何 log 輸出。
 
+> **de-id 範圍明示（review M3，2026-07-02）**：本 PoC 的內容遮蔽只做 `users.name`
+> 的**字面替換**（長名先換防子字串殘留）。暱稱、稱謂（「爸爸」「妹妹」）、電話等
+> 其他識別資訊不在涵蓋範圍 — 主要防線仍是容器邊界（AGY 永不接觸 people memory），
+> 內容遮蔽是最後一道。schema 目前無 alias/nickname 來源（已查證）；擴充遮蔽範圍
+> 列為未來 card。
+
 ### Task 5：429 circuit breaker（D3，完整實作）
 **說明：** AGY 的 API Key 層遇 429（Free Tier 額度耗盡）時，啟動 circuit breaker：
 任務暫停 5hr → 屆時重試，並通知 admin。狀態落 DB（crash-safe），breaker 開啟期間
@@ -155,11 +161,14 @@ A2A 委派 AGY → ADK agent 執行 → 結果回 brain → 回覆使用者。�
 
 ## Open Questions
 
-- **A2A client 選型**：用獨立 `a2a-sdk` client，還是 ADK 2.0 內建 A2A client？
-  兩者皆可；建議 Task 3 grooming 時依 API 易用度二選一。
+- ~~**A2A client 選型**~~ **RESOLVED（實作採獨立 `a2a-sdk` client）**：brain 只需
+  client 端，不必把整個 `google-adk` 依賴樹拉進 brain image；`a2a-sdk`（無 extra）
+  依賴極輕。
 - **Agent Card 發現機制**：PoC 用靜態 `AGY_A2A_URL`；動態發現（well-known/registry）
   列為未來 card。
-- **admin 通知管道**：Task 5 沿用現有哪條 admin 通知路徑待確認（需查既有實作）。
+- ~~**admin 通知管道**~~ **RESOLVED**：沿用 `proactive.py` 的 admin 推播查詢
+  （`SELECT chat_id FROM telegram_accounts ta JOIN users u ... WHERE u.role='admin'`），
+  Telegram sendMessage 直送。
 
 ---
 
@@ -180,3 +189,4 @@ A2A 委派 AGY → ADK agent 執行 → 結果回 brain → 回覆使用者。�
 | 1.0 | 2026-06-23 | Initial proposal（D1–D4 → W26 single-turn PoC，外部前提已查證） |
 | 1.1 | 2026-06-23 | 首個能力定為長文摘要；429 circuit breaker 改完整實作（Task 5）；驗證改 Task 6 |
 | 1.2 | 2026-06-23 | 明確承接基礎 idea 卡（Project Context + Links）；補 mjolnir-trust-model 非阻擋依賴 |
+| 1.3 | 2026-07-02 | Review 修正（[review report](review_pr13_antigravity-a2a-integration-path.md) M1–M4）：breaker 損毀狀態 fail-open、half-open 改 DB CAS 唯一試打權、breaker 檢查移到 de-id 前、de-id 範圍明示；Open Questions 收斂 2 題 |
