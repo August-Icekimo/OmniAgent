@@ -44,7 +44,7 @@ def _to_anthropic_messages(messages: list[Message]) -> list[dict]:
 class ClaudeClient(ModelClient):
     """Anthropic Claude 客戶端，支援 prompt caching。"""
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, model: str = "claude-sonnet-4-6"):
         self._client = anthropic.AsyncAnthropic(
             api_key=os.environ["ANTHROPIC_API_KEY"],
         )

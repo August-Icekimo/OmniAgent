@@ -10,7 +10,7 @@
       "max_tokens": 8192
     },
     "claude": {
-      "model": "claude-3-5-sonnet-20241022",
+      "model": "claude-sonnet-4-6",
       "enabled": true,
       "skip_in_test": false,
       "context_length": 200000
