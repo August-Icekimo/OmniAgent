@@ -93,6 +93,13 @@ Task 6 附註已誠實記錄：機制驗通、但 planner 自動選用因 Gemini
 無法示範。這是 merge 後的已知殘留 — 建議在 Gemini provider 修復後補一次實測，
 避免「tool 掛著但 planner 從不選它」的沉默失效。
 
+> **✅ RESOLVED（2026-07-02）**：修復 provider chain 後實證通過。根因：routing_config
+> 的 claude model `claude-3-5-sonnet-20241022`（2025-10-28 退役）與 client 預設
+> `claude-sonnet-4-20250514`（2026-06-15 退役）皆 404 → 換 `claude-sonnet-4-6`；
+> Gemini API Key 直打已恢復（先前 403/quota 屬暫時性退化）。實測（真 SOUL.md prompt +
+> TOOL_SPECS + tool_choice=auto）：Claude 口語/明確摘要 2/2 自動選用
+> delegate_to_specialist；Gemini 明確摘要選用、口語短文自行摘要（合理判斷，非缺陷）。
+
 ## 加分項（值得保留的做法）
 
 - **fail-fast 順序正確**：`agy_server.py` 在 import ADK 之前完成 env 正規化與缺 key 檢查。
