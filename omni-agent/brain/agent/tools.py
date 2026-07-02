@@ -49,6 +49,23 @@ TOOL_SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="delegate_to_specialist",
+        description=(
+            "把『長文摘要/總結』這類外包工作，委派給隔離容器中的 specialist agent 處理。"
+            "使用者貼一段長文要你摘要、或要求總結長內容時用；一般短回答、閒聊不要用。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "要委派的內容（要摘要的長文，可含指示）",
+                },
+            },
+            "required": ["task"],
+        },
+    ),
+    ToolSpec(
         name="wake_on_lan",
         description="喚醒指定的伺服器（送 Wake-on-LAN magic packet）。",
         parameters={
@@ -84,7 +101,8 @@ def tool_needs_confirmation(name: str, args: dict) -> bool:
     執行安全由沙箱顧好，直接跑。其餘有真實世界副作用、不受沙箱保護的寫入工具
     （wake_on_lan、cockpit restart_service…）仍需確認。
     """
-    if name in ("web_search", "terminal"):
+    # delegate_to_specialist：摘要類唯讀工作，無真實世界副作用 → 不需確認。
+    if name in ("web_search", "terminal", "delegate_to_specialist"):
         return False
     if name == "cockpit":
         return (args or {}).get("action") == "restart_service"
@@ -107,6 +125,39 @@ async def execute_tool(name: str, args: dict, model_router) -> dict:
             background=bool(args.get("background", False)),
             task_id=args.get("task_id"),
         )
+
+    if name == "delegate_to_specialist":
+        from skills.specialist import get_specialist_client, redact_names
+        from skills import specialist_breaker as breaker
+        client = get_specialist_client()
+        task = str(args.get("task") or "").strip()
+        if not task:
+            return {"success": False, "error": "缺少委派內容 task"}
+        pool = getattr(model_router, "_db_pool", None) if model_router else None
+        # 429 circuit breaker：open 期間直接降級、不送 AGY（D3）。
+        # 先問「能不能送」再做 de-id，open 期間不浪費名單查詢。
+        allowed, half_open = await breaker.allow(pool)
+        if not allowed:
+            return {"success": False, "error": "specialist 暫時休息中（API 額度保護），稍後再試"}
+        # 去識別化：送出前抹除家人姓名（容器邊界即隱私邊界，AGY 永不見 people memory）。
+        # 範圍：users.name 的字面替換；暱稱/稱謂等不在本 PoC 涵蓋（見 change doc Task 4）。
+        if pool:
+            try:
+                rows = await pool.fetch(
+                    "SELECT name FROM users WHERE name IS NOT NULL AND length(name) >= 2"
+                )
+                task = redact_names(task, [r["name"] for r in rows])
+            except Exception as e:  # noqa: BLE001 — 取名單失敗不阻斷委派
+                logger.warning("de-id 取名單失敗，改以原文委派: %s", e)
+        else:
+            logger.warning("無 DB pool，跳過 de-id（委派內容未遮蔽）")
+        result = await client.delegate(task)
+        if result.get("success"):
+            if half_open:
+                await breaker.close(pool)  # 試打成功 → 關閉 breaker
+        elif breaker.is_quota_error(result.get("error", "")):
+            await breaker.trip(pool, reason=result.get("error", ""))  # 偵測 429 → 開啟
+        return result
 
     if name == "web_search":
         from skills.web_search import get_web_search_provider
