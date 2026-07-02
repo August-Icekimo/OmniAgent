@@ -190,3 +190,4 @@ A2A 委派 AGY → ADK agent 執行 → 結果回 brain → 回覆使用者。�
 | 1.1 | 2026-06-23 | 首個能力定為長文摘要；429 circuit breaker 改完整實作（Task 5）；驗證改 Task 6 |
 | 1.2 | 2026-06-23 | 明確承接基礎 idea 卡（Project Context + Links）；補 mjolnir-trust-model 非阻擋依賴 |
 | 1.3 | 2026-07-02 | Review 修正（[review report](review_pr13_antigravity-a2a-integration-path.md) M1–M4）：breaker 損毀狀態 fail-open、half-open 改 DB CAS 唯一試打權、breaker 檢查移到 de-id 前、de-id 範圍明示；Open Questions 收斂 2 題 |
+| 1.4 | 2026-07-02 | Archived — implementation complete（PR #13 merged） |

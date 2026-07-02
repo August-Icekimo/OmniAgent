@@ -7,7 +7,7 @@ priority: P1
 created: 2026-06-10
 discussed: 2026-06-21
 resolved: 2026-07-02
-resolved_by: docs/change_antigravity-a2a-integration-path.md
+resolved_by: docs/archive/change_antigravity-a2a-integration-path.md
 ---
 
 # A2A Integration Path — ADK 2.0 Specialist Agents
