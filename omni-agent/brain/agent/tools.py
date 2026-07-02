@@ -128,12 +128,19 @@ async def execute_tool(name: str, args: dict, model_router) -> dict:
 
     if name == "delegate_to_specialist":
         from skills.specialist import get_specialist_client, redact_names
+        from skills import specialist_breaker as breaker
         client = get_specialist_client()
         task = str(args.get("task") or "").strip()
         if not task:
             return {"success": False, "error": "缺少委派內容 task"}
-        # 去識別化：送出前抹除家人姓名（容器邊界即隱私邊界，AGY 永不見 people memory）。
         pool = getattr(model_router, "_db_pool", None) if model_router else None
+        # 429 circuit breaker：open 期間直接降級、不送 AGY（D3）。
+        # 先問「能不能送」再做 de-id，open 期間不浪費名單查詢。
+        allowed, half_open = await breaker.allow(pool)
+        if not allowed:
+            return {"success": False, "error": "specialist 暫時休息中（API 額度保護），稍後再試"}
+        # 去識別化：送出前抹除家人姓名（容器邊界即隱私邊界，AGY 永不見 people memory）。
+        # 範圍：users.name 的字面替換；暱稱/稱謂等不在本 PoC 涵蓋（見 change doc Task 4）。
         if pool:
             try:
                 rows = await pool.fetch(
@@ -144,11 +151,6 @@ async def execute_tool(name: str, args: dict, model_router) -> dict:
                 logger.warning("de-id 取名單失敗，改以原文委派: %s", e)
         else:
             logger.warning("無 DB pool，跳過 de-id（委派內容未遮蔽）")
-        # 429 circuit breaker：open 期間直接降級、不送 AGY（D3）。
-        from skills import specialist_breaker as breaker
-        allowed, half_open = await breaker.allow(pool)
-        if not allowed:
-            return {"success": False, "error": "specialist 暫時休息中（API 額度保護），稍後再試"}
         result = await client.delegate(task)
         if result.get("success"):
             if half_open:
