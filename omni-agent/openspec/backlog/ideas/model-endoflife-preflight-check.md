@@ -1,11 +1,20 @@
 ---
 slug: model-endoflife-preflight-check
-status: in-sprint
+status: resolved
 domain: llm
 size: S
 priority: P1
 created: 2026-08-29
+resolved: 2026-09-19
+resolved_by: docs/archive/change_model-endoflife-preflight-check.md
 ---
+
+> **SHIPPED（2026-09-19，W38）。** brain 啟動時背景 preflight 已上線（commit `7ca9db9`）：
+> 每個設定的 model id 做零 token 中繼資料查詢，退役／無權限出 WARNING 並指明來源檔案與鍵。
+> 實作時發現並修了兩件卡片沒料到的事：ClaudeClient.chat 缺 `thinking_budget`/`model` 參數
+> 導致 routing_config 的 claude model 從未生效；`config_loader.DEFAULT_CONFIG` 是第三處
+> 過期 id。Open questions 的三項（admin 通知、新版偵測、`/health` 吐結果）皆維持不做／另立。
+> 歸檔見 [docs/archive/change_model-endoflife-preflight-check.md](../../../docs/archive/change_model-endoflife-preflight-check.md)。
 
 # Model 退役偵測：provider chain 靜默降級無人知道
 

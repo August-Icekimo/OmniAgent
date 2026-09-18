@@ -226,3 +226,4 @@ shutdown 段把該 task 加進既有 cancel 迴圈。
 |---|---|---|
 | 1.0 | 2026-09-19 | Initial proposal（含查碼三發現：第三處 retired id、Claude `model` 死設定、`upgrade_model` 零引用） |
 | 1.1 | 2026-09-19 | 全 6 tasks 完成並實機驗證。修正發現 2 的描述：觸發 TypeError 的是 `thinking_budget`；ClaudeClient 一併補齊並回報實際 model id |
+| 1.2 | 2026-09-19 | Archived — implementation complete（commits 7ca9db9、9c1d063，直接落 main） |
