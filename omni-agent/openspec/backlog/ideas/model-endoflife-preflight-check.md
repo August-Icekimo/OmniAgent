@@ -25,29 +25,41 @@ drop-in（帶 temperature 會 400）。這是「會週期性再發生」的一�
 只把它寫成一條散文教訓 —— 沒有機制，下次照樣八個月後才知道。
 
 ## What (high-level)
-一個能定期跑的 preflight：對 `routing_config.json` 內**每一個** model id
-（含 `upgrade_model`）發一次極小的真實請求，回報 ok / 4xx / 退役。
+**主路徑：brain 啟動時的 preflight，不是手動腳本。**
 
-- 覆蓋設定檔 **與** client 端預設值兩處 —— 這次就是兩處都過期，且 client 預設
-  平時被 config 覆寫、只在 fallback 路徑現形，最難察覺
-- 輸出人可讀結果（哪家通、哪家 404/403、實際回應 model id）
-- 執行方式：先做成可手動跑的腳本（比照 `test_router.py`），能跑再談要不要接
-  cron 或 admin 主動通知
-- 順帶把 brain `/health`（[main.py:356](../../../brain/main.py#L356) 目前只回
-  `{"status":"ok"}` 硬編）是否納入 provider 狀態一併評估
+`lifespan`（[main.py:263](../../../brain/main.py#L263)）建好 ModelRouter 後，對
+`routing_config.json` 內每一個 model id（含 `upgrade_model`）各發一次 ping 級
+請求，結果寫 log、失敗的出 WARNING。
+
+選啟動檢查而非手動腳本的理由：**它掛在你本來就會做的動作上（`compose up`），
+不掛在記性上。** 本卡要防的失效模式是「八個月沒人發現」—— 這期間 brain 必然
+重啟過很多次，啟動檢查會在第一次重啟就叫出來；一個要人記得跑的腳本不會。
+
+實作要點：
+
+- **不得阻擋啟動**：比照 lifespan 現行的 STT／DB pool 寫法 —— try/except 包住、
+  失敗只 log 不 raise。檢查本身建議在背景 task 跑，別讓幾個 API 往返拖長開機。
+- **覆蓋設定檔與 client 端預設值兩處** —— 這次就是兩處都過期，且 client 預設平時
+  被 config 覆寫、只在 fallback 路徑現形，最難察覺
+- **log 要能直接動手**：哪個 id、在哪個檔案、什麼錯誤，不要只說「claude 失敗」
+- local（`skip_in_test: true`）另行處理：rapid-mlx 可能整台沒開，屬預期狀況，
+  語氣與雲端 provider 退役要能區分
+- 手動腳本（比照 `test_router.py`）可順手包一層共用同一函式，但屬附帶產物，非主路徑
 
 ## Acceptance hints
-- 一個指令能列出所有設定的 model id 及其實測可用性，含 local/gemini/claude
-- 任一 model id 退役或無權限時，輸出明確指出是哪個 id、哪個檔案、什麼錯誤
-- 每個 provider 僅耗極小 token（1 個 token 的 ping 級請求）
-- `skip_in_test: true` 的 provider（local）可跳過或另行處理
+- brain 啟動後 log 即可看出每個設定的 model id 是否可用，含 local/gemini/claude
+- 任一 model id 退役或無權限時，log 明確指出是哪個 id、哪個檔案、什麼錯誤
+- **provider 全掛時 brain 仍正常啟動並服務**（降級靠既有 fallback chain，不是靠這個檢查）
+- 每個 provider 每次啟動僅耗極小 token（1 個 token 的 ping 級請求）
+- 檢查可用 env 關閉（頻繁重啟除錯時不想每次打 API）
 
 ## Open questions
-- 只做手動腳本，還是接排程？（傾向先手動 —— 排程要處理通知去向與噪音，
-  但手動的東西照經驗不會有人記得跑，這是本卡的核心張力）
-- 通知走 admin proactive 訊息（比照 breaker 的 admin 通知）還是只寫 log？
+- 除了 log 之外要不要主動通知 admin？（比照 breaker 的 admin 通知路徑。傾向不要 ——
+  開機噪音會讓通知貶值，log 先行，真的漏看再加）
 - 要不要一併偵測「新版可用」（如 claude-sonnet-5）而非只偵測「舊版已死」？
   —— 注意 sonnet-5 非 drop-in（temperature 會 400），偵測到也不能自動換
+- brain `/health`（[main.py:356](../../../brain/main.py#L356) 目前只回 `{"status":"ok"}`
+  硬編）要不要吐出最近一次 preflight 結果？（分開評估，別讓本卡膨脹）
 
 ## Links
 - Roadmap: openspec/backlog/ROADMAP.md#2026-q3--phase-59-agent-capabilities
