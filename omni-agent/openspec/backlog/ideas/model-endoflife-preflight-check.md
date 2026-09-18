@@ -1,6 +1,6 @@
 ---
 slug: model-endoflife-preflight-check
-status: idea
+status: in-sprint
 domain: llm
 size: S
 priority: P1
