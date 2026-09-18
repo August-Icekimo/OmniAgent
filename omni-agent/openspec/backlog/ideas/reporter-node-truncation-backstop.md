@@ -1,11 +1,27 @@
 ---
 slug: reporter-node-truncation-backstop
-status: idea
+status: resolved
 domain: brain
 size: S
 priority: P2
 created: 2026-06-10
+resolved: 2026-09-19
+resolution: won't-do
+resolved_by: openspec/backlog/sprints/2026-W38.md
 ---
+
+> **關卡（2026-09-19，won't-do）。** 本卡四度（W24/W26/W36/W38）未動工，W36 retro 預立
+> 「W38 再未動即關」。開工前查證，發現卡片的兩個前提都已不存在：
+>
+> 1. **要對齊的 planner 保底已被移除。** dd1b691 的 `finish_reason == "length"` 升級重試
+>    在 PR #10（commit `772f663`「tool-call 迴圈取代 prompt-JSON planner + 移除升級舉旗」）
+>    整條拆掉，現在 `brain/agent/` 內沒有任何 `finish_reason` 處理，無「一致」可言。
+> 2. **「skill 結果報告」路徑已不經 reporter_node。** 同一次重構後 skill 結果由 agent
+>    工具迴圈回饋模型續跑；`reporter_node` 現僅服務 file_analyze 感知回覆（貼圖／語音描述），
+>    輸出短，本卡 open question 自己已指出這條路徑「只需 log 不需重試」。
+>
+> 若長輸出截斷仍是活問題，屬全新前提（agent 迴圈層是否需要截斷偵測），另開新卡，
+> 不沿用本卡。下方原始內容僅作歷史記錄。
 
 # reporter_node 缺截斷保底（finish_reason）
 
