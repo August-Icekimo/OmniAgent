@@ -16,7 +16,10 @@ import os
 import re
 
 from openai import AsyncOpenAI
-from .base import ModelClient, Message, LLMResponse, Role, ToolCall, ToolSpec
+from .base import (
+    CHECK_MODEL_TIMEOUT, ModelIdMismatch, ModelClient, Message, LLMResponse, Role,
+    ToolCall, ToolSpec,
+)
 
 logger = logging.getLogger("brain.llm.local")
 
@@ -152,7 +155,8 @@ class LocalClient(ModelClient):
         self._base_url = base_url or os.environ.get(
             "MLX_BASE_URL", "http://100.88.136.117:8000/v1"
         )
-        self._model = model or os.environ.get("MLX_MODEL", "gemma-4-26b")
+        # 預設值須與 routing_config.json / .env.example 一致（rapid-mlx /v1/models 實際服務 id）
+        self._model = model or os.environ.get("MLX_MODEL", "gemma-4-26b-4bit")
         self._thinking_budget = thinking_budget
         self._client = AsyncOpenAI(
             base_url=self._base_url,
@@ -276,6 +280,16 @@ class LocalClient(ModelClient):
 
     def model_name(self) -> str:
         return self._model
+
+    async def check_model(self, model_id: str) -> None:
+        # GET /v1/models：不打 chat、不占 GPU。伺服器離線由 openai.APIConnectionError 原樣冒出
+        # （屬預期情境，呼叫端降級措辭）；在線但 id 不在清單 → ModelIdMismatch 帶回實際 id。
+        page = await asyncio.wait_for(
+            self._client.models.list(), timeout=CHECK_MODEL_TIMEOUT
+        )
+        served = [m.id for m in page.data]
+        if model_id not in served:
+            raise ModelIdMismatch(model_id, served)
 
     async def supports_vision(self) -> bool:
         return True  # Rapid-MLX --mllm 模式，gemma-4-26b 含 vision tower

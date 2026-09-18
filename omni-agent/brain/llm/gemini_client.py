@@ -1,9 +1,12 @@
 """Gemini provider — 使用 google-genai SDK，啟用 Context Caching。"""
 
+import asyncio
 import os
 from google import genai
 from google.genai import types
-from .base import ModelClient, Message, LLMResponse, Role, ToolCall, ToolSpec
+from .base import (
+    CHECK_MODEL_TIMEOUT, ModelClient, Message, LLMResponse, Role, ToolCall, ToolSpec,
+)
 from .gemini_utils import build_gemini_parts
 
 
@@ -194,6 +197,12 @@ class GeminiClient(ModelClient):
 
     def model_name(self) -> str:
         return self._model
+
+    async def check_model(self, model_id: str) -> None:
+        # GET models/{id}：不存在或已退役的 id 回 404（errors.ClientError，`.code` 為狀態碼）。
+        await asyncio.wait_for(
+            self._client.aio.models.get(model=model_id), timeout=CHECK_MODEL_TIMEOUT
+        )
 
     async def supports_vision(self) -> bool:
         return True

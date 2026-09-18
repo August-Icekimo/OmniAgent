@@ -4,6 +4,18 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 
+# check_model 每次查詢的逾時（秒）：中繼資料查詢應在數百 ms 內完成，逾時視為失敗，不掛住啟動。
+CHECK_MODEL_TIMEOUT = 10.0
+
+
+class ModelIdMismatch(Exception):
+    """伺服器在線，但設定的 model id 不在其服務清單中（local provider 專用）。"""
+
+    def __init__(self, model_id: str, served: list[str]):
+        self.model_id = model_id
+        self.served = served
+        super().__init__(f"model id {model_id!r} not served; server serves {served}")
+
 
 class Role(str, Enum):
     SYSTEM = "system"
@@ -96,3 +108,12 @@ class ModelClient(ABC):
     async def supports_vision(self) -> bool:
         """此 provider 是否支援圖片輸入。"""
         ...
+
+    async def check_model(self, model_id: str) -> None:
+        """驗證 `model_id` 存在且本憑證有權使用（啟動 preflight 用）。
+
+        以 provider 的模型中繼資料查詢實作（零生成 token）；成功回 None，
+        失敗 raise 原 SDK 例外（呼叫端據 HTTP 狀態分類）或 `ModelIdMismatch`。
+        非 abstract：未實作的 client 不參與 preflight。
+        """
+        raise NotImplementedError(f"{self.provider_name()} does not implement check_model")

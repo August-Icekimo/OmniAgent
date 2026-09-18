@@ -1,8 +1,11 @@
 """Claude provider — 使用 anthropic 官方 SDK，啟用 Prompt Caching。"""
 
+import asyncio
 import os
 import anthropic
-from .base import ModelClient, Message, LLMResponse, Role, ToolCall, ToolSpec
+from .base import (
+    CHECK_MODEL_TIMEOUT, ModelClient, Message, LLMResponse, Role, ToolCall, ToolSpec,
+)
 
 
 def _to_anthropic_messages(messages: list[Message]) -> list[dict]:
@@ -59,9 +62,14 @@ class ClaudeClient(ModelClient):
         max_tokens: int = 4096,
         tools: list[ToolSpec] | None = None,
         tool_choice: str = "auto",
+        thinking_budget: int | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
+        # 與 Gemini／Local 簽名對齊，讓 router 的第一次呼叫（帶 thinking_budget 與 model）直接成立，
+        # 不再落到 except TypeError 的無 model 重試（那條路徑會讓 routing_config 的覆寫失效）。
+        # thinking_budget 對 Claude 目前無對應（extended thinking 未接線），接受但忽略。
         kwargs: dict = {
-            "model": self._model,
+            "model": model or self._model,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "messages": _to_anthropic_messages(messages),
@@ -115,7 +123,8 @@ class ClaudeClient(ModelClient):
 
         return LLMResponse(
             content="".join(text_parts),
-            model=self._model,
+            # 回報 API 實際使用的 id（router 可能以 config 覆寫），非建構子預設值
+            model=getattr(response, "model", None) or kwargs["model"],
             provider="claude",
             usage=usage,
             cached=cached,
@@ -128,6 +137,12 @@ class ClaudeClient(ModelClient):
 
     def model_name(self) -> str:
         return self._model
+
+    async def check_model(self, model_id: str) -> None:
+        # GET /v1/models/{id}：退役或不存在的 id 回 404（NotFoundError）、key 無效回 401。
+        await asyncio.wait_for(
+            self._client.models.retrieve(model_id), timeout=CHECK_MODEL_TIMEOUT
+        )
 
     async def supports_vision(self) -> bool:
         # 模型本身支援 vision，但本 client 尚未實作內部 image block →

@@ -5,6 +5,8 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
+# 僅在 routing_config.json 缺檔／壞檔時生效；平時被完全遮蔽，最容易藏過期 model id。
+# 啟動 preflight（llm/preflight.py）會檢查實際載入的設定，此處務必與 routing_config.json 同步。
 DEFAULT_CONFIG = {
     "providers": {
         "gemini": {
@@ -14,11 +16,11 @@ DEFAULT_CONFIG = {
             "upgrade_model": "gemini-2.5-pro"
         },
         "claude": {
-            "model": "claude-3-5-sonnet-20241022",
+            "model": "claude-sonnet-4-6",
             "enabled": True
         },
         "local": {
-            "model": "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
+            "model": "gemma-4-26b-4bit",
             "enabled": True,
             "health_check": True
         }

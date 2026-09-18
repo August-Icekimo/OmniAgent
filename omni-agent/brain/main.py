@@ -257,6 +257,20 @@ async def _terminal_log_cleanup_loop(app: FastAPI):
             raise
 
 
+async def _run_model_preflight(app: FastAPI):
+    """背景執行 model preflight；任何例外只 log，結果放 app.state.model_preflight。"""
+    try:
+        from llm.preflight import run_model_preflight
+        from config.config_loader import load_routing_config
+        app.state.model_preflight = await run_model_preflight(
+            app.state.router, load_routing_config()
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"Model preflight crashed (brain unaffected): {e}")
+
+
 # --- App Lifespan ---
 
 @asynccontextmanager
@@ -279,6 +293,15 @@ async def lifespan(app: FastAPI):
     # 初始化 ModelRouter
     router = create_default_router()
     app.state.router = router
+
+    # Model preflight：背景驗證每個設定的 model id 仍可用（退役／無權限會出 WARNING）。
+    # 不阻擋啟動、不 raise；MODEL_PREFLIGHT_ENABLED=false 可關（頻繁重啟除錯時省 API 往返）。
+    app.state.model_preflight = None
+    app.state.model_preflight_task = None
+    if os.getenv("MODEL_PREFLIGHT_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on"):
+        app.state.model_preflight_task = asyncio.create_task(_run_model_preflight(app))
+    else:
+        logger.info("Model preflight skipped (MODEL_PREFLIGHT_ENABLED=false)")
 
     # 初始化 DB connection pool
     dsn = os.getenv("DATABASE_URL")
@@ -332,7 +355,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    for attr in ("terminal_cleanup_task", "stale_turn_reaper_task"):
+    for attr in ("terminal_cleanup_task", "stale_turn_reaper_task", "model_preflight_task"):
         task = getattr(app.state, attr, None)
         if task:
             task.cancel()
