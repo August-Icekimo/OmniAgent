@@ -61,9 +61,9 @@ Cindy 回覆時會搞錯「現在」——實機看到模型自稱「現實時�
 日期 + 星期 + 時:分 + 台北標記。
 
 **Acceptance Criteria:**
-- [ ] 任一請求的 system_prompt 動態區含當前台北日期時間（`grep` 得到 `## Now` + 正確日期）。
-- [ ] 問「今天幾號 / 現在幾點」回覆與真實台北時間一致，**不再出現 2024/錯誤年份**。
-- [ ] `## Now` 位於 SOUL 靜態段之後（不影響 prefix cache 命中）。
+- [x] 任一請求的 system_prompt 動態區含當前台北日期時間（`grep` 得到 `## Now` + 正確日期）。
+- [x] 問「今天幾號 / 現在幾點」回覆與真實台北時間一致，**不再出現 2024/錯誤年份**。
+- [x] `## Now` 位於 SOUL 靜態段之後（不影響 prefix cache 命中）。
 
 ### Task 2：歷史 gap-aware 時間戳（Layer B）
 **說明：** `short_term.load()` 改為每則附上所屬輪的 `created_at`；
@@ -71,10 +71,10 @@ Cindy 回覆時會搞錯「現在」——實機看到模型自稱「現實時�
 才在該則 content 前綴時間標記（存回歷史的 content 保持乾淨，只在組 prompt 當下加）。
 
 **Acceptance Criteria:**
-- [ ] 兩輪對話間隔 > 30 分鐘 → 後一輪在送模型的訊息前帶時間標記。
-- [ ] 間隔 ≤ 30 分鐘 → 不加標記（連續對話不被時間戳洗版）。
-- [ ] 存回 `conversations` 的 content **不含**注入的時間前綴（無遞迴累加）。
-- [ ] 既有（無顯式 ts 欄位的）歷史 row 仍可用 `created_at` 正常標時（回溯相容）。
+- [x] 兩輪對話間隔 > 30 分鐘 → 後一輪在送模型的訊息前帶時間標記。
+- [x] 間隔 ≤ 30 分鐘 → 不加標記（連續對話不被時間戳洗版）。
+- [x] 存回 `conversations` 的 content **不含**注入的時間前綴（無遞迴累加）。
+- [x] 既有（無顯式 ts 欄位的）歷史 row 仍可用 `created_at` 正常標時（回溯相容）。
 
 ### Task 3：時區渲染正確 + stress_logs 併修
 **說明：** 統一時間渲染：`now` 用 `datetime.now()`（容器-台北）；DB `timestamptz`
@@ -82,9 +82,9 @@ Cindy 回覆時會搞錯「現在」——實機看到模型自稱「現實時�
 `strftime`。修正 `context.md.jinja` stress_logs 的 UTC 顯示。
 
 **Acceptance Criteria:**
-- [ ] stress_logs 在 system_prompt 顯示的時間為台北時間（與 DB UTC 值相差 +8h 正確換算）。
-- [ ] 歷史時間標記亦為台北時間。
-- [ ] `now` 與 DB-來源時間的渲染一致（同格式、同時區）。
+- [x] stress_logs 在 system_prompt 顯示的時間為台北時間（與 DB UTC 值相差 +8h 正確換算）。
+- [x] 歷史時間標記亦為台北時間。
+- [x] `now` 與 DB-來源時間的渲染一致（同格式、同時區）。
 
 ---
 
@@ -128,3 +128,4 @@ Cindy 回覆時會搞錯「現在」——實機看到模型自稱「現實時�
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-06-14 | Initial proposal（A+B、gap-aware 30min、brain now()、併修 stress_logs TZ） |
+| 1.1 | 2026-09-19 | Archived — implementation complete（PR #12 merged，06-14 部署；Task 1 日期 smoke 通過，Task 2/3 依 code review 勾選，未另做完整實測） |
