@@ -22,8 +22,9 @@ Claude provider 從 2025-10 到 2026-07 實質 404 了八個月沒人發現（co
    仍釘 `claude-3-5-sonnet-20241022` 與一個 Llama 3.1 local model。它只在 json 缺檔時生效，
    平時被完全遮蔽 —— 正是最難察覺的那種。
 2. **`routing_config.json` 的 claude `model` 欄位目前是死設定。**
-   [ClaudeClient.chat](../brain/llm/claude_client.py#L53) 的簽名**沒有 `model` 參數**；
-   router 傳 `model=target_model` 會撞 `TypeError`，落到
+   [ClaudeClient.chat](../brain/llm/claude_client.py#L53) 的簽名**沒有 `model` 與 `thinking_budget`
+   兩個參數**（apply 時實證：觸發 TypeError 的其實是 `thinking_budget`）；router 第一次呼叫會撞
+   `TypeError`，落到
    [router.py:310-318](../brain/llm/router.py#L310-L318) 的 `except TypeError` 重試路徑，
    於是實際打的永遠是 client 建構子預設值。Gemini 與 Local 兩個 client 都接受 `model`，
    只有 Claude 沒有。**preflight 必須檢查「實際會被打的 id」**，而不只是設定檔寫的 id；
@@ -88,10 +89,10 @@ Claude provider 從 2025-10 到 2026-07 實質 404 了八個月沒人發現（co
   raise 自訂 `ModelIdMismatch(served=[...])`；連線失敗讓 SDK 例外原樣冒出。
 
 **Acceptance Criteria:**
-- [ ] 三個 client 對正確 id 回 None，不產生任何生成 token（usage 為零／無 chat 呼叫）
-- [ ] Claude／Gemini 對退役或不存在 id raise，例外物件可取得 HTTP 狀態碼（404 / 401 / 403）
-- [ ] Local 伺服器不在線時 raise 連線類例外；在線但 id 不符時 raise `ModelIdMismatch` 並帶回伺服器實際 id
-- [ ] 每次 `check_model` 有逾時（建議 10s），逾時視為失敗不掛住
+- [x] 三個 client 對正確 id 回 None，不產生任何生成 token（usage 為零／無 chat 呼叫）
+- [x] Claude／Gemini 對退役或不存在 id raise，例外物件可取得 HTTP 狀態碼（404 / 401 / 403）
+- [x] Local 伺服器不在線時 raise 連線類例外；在線但 id 不符時 raise `ModelIdMismatch` 並帶回伺服器實際 id
+- [x] 每次 `check_model` 有逾時（建議 10s），逾時視為失敗不掛住
 
 ### Task 2：`brain/llm/preflight.py` — 收集、檢查、分類、log
 **說明：** 新模組，對外一個函式
@@ -110,10 +111,10 @@ Claude provider 從 2025-10 到 2026-07 實質 404 了八個月沒人發現（co
   error_class: str, detail: str, checked_at: datetime`。
 
 **Acceptance Criteria:**
-- [ ] WARNING 行可直接動手：含 provider、model id、來源檔案與鍵、HTTP 狀態／例外摘要
-- [ ] `upgrade_model` 的結果行帶 `(configured, currently unused)` 標示
-- [ ] 任一 provider 例外不影響其他 provider 的檢查與 log
-- [ ] 全部 provider 失敗時函式仍正常回傳結果清單，不 raise
+- [x] WARNING 行可直接動手：含 provider、model id、來源檔案與鍵、HTTP 狀態／例外摘要
+- [x] `upgrade_model` 的結果行帶 `(configured, currently unused)` 標示
+- [x] 任一 provider 例外不影響其他 provider 的檢查與 log
+- [x] 全部 provider 失敗時函式仍正常回傳結果清單，不 raise
 
 ### Task 3：`lifespan` 接線 + env 開關
 **說明：** [main.py](../brain/main.py) `lifespan` 內、`create_default_router()` 之後：
@@ -123,21 +124,22 @@ Claude provider 從 2025-10 到 2026-07 實質 404 了八個月沒人發現（co
 shutdown 段把該 task 加進既有 cancel 迴圈。
 
 **Acceptance Criteria:**
-- [ ] brain 啟動時間不因 preflight 增加（task 在背景跑，`yield` 不等它）
-- [ ] preflight 內任何例外只 log ERROR，brain 照常服務 `/chat`
-- [ ] `MODEL_PREFLIGHT_ENABLED=false` 時 log 一行 skip，不發任何 API 呼叫
-- [ ] `app.state.model_preflight` 在 task 完成後可讀到結果；完成前為 None
-- [ ] shutdown 時 task 被 cancel，無 pending task 警告
+- [x] brain 啟動時間不因 preflight 增加（task 在背景跑，`yield` 不等它）
+- [x] preflight 內任何例外只 log ERROR，brain 照常服務 `/chat`
+- [x] `MODEL_PREFLIGHT_ENABLED=false` 時 log 一行 skip，不發任何 API 呼叫
+- [x] `app.state.model_preflight` 在 task 完成後可讀到結果；完成前為 None
+- [x] shutdown 時 task 被 cancel，無 pending task 警告
 
 ### Task 4：ClaudeClient 補 `model` 參數
 **說明：** [claude_client.py:53](../brain/llm/claude_client.py#L53) `chat()` 加
-`model: str | None = None`，`kwargs["model"] = model or self._model`。
+`model: str | None = None` 與 `thinking_budget: int | None = None`（後者接受但忽略），
+`kwargs["model"] = model or self._model`；`LLMResponse.model` 改回報 API 實際使用的 id。
 與 Gemini／Local 簽名對齊；router 對 Claude 不再常態走 `except TypeError` 重試。
 
 **Acceptance Criteria:**
-- [ ] `routing_config.json` 改 claude `model` 後，實際 API 請求使用該 id（log `Router: attempting claude with model X` 與回應 `LLMResponse.model` 一致）
-- [ ] 不傳 `model` 時行為與現在完全相同
-- [ ] preflight 對 claude 的「config id」與「client default id」兩行結果都正確（此時兩者相同，去重後一行、兩個來源）
+- [x] `routing_config.json` 改 claude `model` 後，實際 API 請求使用該 id（log `Router: attempting claude with model X` 與回應 `LLMResponse.model` 一致）
+- [x] 不傳 `model` 時行為與現在完全相同
+- [x] preflight 對 claude 的「config id」與「client default id」兩行結果都正確（此時兩者相同，去重後一行、兩個來源）
 
 ### Task 5：同步預設值與環境設定
 **說明：**
@@ -149,9 +151,9 @@ shutdown 段把該 task 加進既有 cancel 迴圈。
   `asyncio.run(run_model_preflight(...))`、印結果表。
 
 **Acceptance Criteria:**
-- [ ] 三處（json、DEFAULT_CONFIG、client 預設）的 claude／local id 一致
-- [ ] `python test_model_preflight.py` 在有 key 的環境印出每個 id 的 ok/失敗與來源
-- [ ] `.env.example` 有開關且預設值與程式一致
+- [x] 三處（json、DEFAULT_CONFIG、client 預設）的 claude／local id 一致
+- [x] `python test_model_preflight.py` 在有 key 的環境印出每個 id 的 ok/失敗與來源
+- [x] `.env.example` 有開關且預設值與程式一致
 
 ### Task 6：實機驗證（含假設驗證）
 **說明：** `podman compose build brain && podman compose up -d brain` 後看 log，並做三個故障注入：
@@ -163,10 +165,10 @@ shutdown 段把該 task 加進既有 cancel 迴圈。
 3. `MODEL_PREFLIGHT_ENABLED=false` → 期待一行 skip、無 API 呼叫。
 
 **Acceptance Criteria:**
-- [ ] 正常設定下 log 出現 4 行結果 + 1 行 summary，全 ok
-- [ ] 注入 1 的 WARNING 內容足以不看程式碼就知道改哪個檔案的哪個鍵
-- [ ] 注入 2、3 行為如預期，且三種情況 brain 啟動皆正常、`curl :8000/health` 回 ok
-- [ ] 驗證結果（含實際 log 片段）記入本文件 Revision History 或 Testing Notes
+- [x] 正常設定下 log 出現 4 行結果 + 1 行 summary，全 ok
+- [x] 注入 1 的 WARNING 內容足以不看程式碼就知道改哪個檔案的哪個鍵
+- [x] 注入 2、3 行為如預期，且三種情況 brain 啟動皆正常、`curl :8000/health` 回 ok
+- [x] 驗證結果（含實際 log 片段）記入本文件 Revision History 或 Testing Notes
 
 ---
 
@@ -178,6 +180,33 @@ shutdown 段把該 task 加進既有 cancel 迴圈。
 - `OMNI_ENV=test` 下 local 不註冊，preflight 只檢查雲端兩家。
 - 故障注入改完記得還原 `routing_config.json`，且**不要 commit** 注入用的 id。
 - 手動腳本 `test_model_preflight.py` 從 repo 根目錄跑（同 `test_router.py` 的 `sys.path` 慣例）。
+
+### 實機驗證記錄（2026-09-19）
+
+- **假設成立**：Anthropic `models.retrieve` 對 `claude-3-5-sonnet-20241022`、`claude-sonnet-4-20250514`
+  皆回 `NotFoundError` 404；Gemini `models.get` 對 `gemini-1.0-pro` 回 `ClientError` code=404。
+  無需退回 1-token chat ping。
+- **正常啟動**（`podman compose build brain && up -d brain`）：`/health` 9s 內回 ok，
+  graph 初始化後 0.4s 出現 4 行 `model preflight OK` + `model preflight: 4 ok, 0 failed`。
+- **注入 1**（退役 id 寫入容器內 `routing_config.json` 後重啟）：
+  ```
+  WARNING model preflight FAILED: claude/claude-3-5-sonnet-20241022 class=retired_or_unknown
+    — fix in: brain/config/routing_config.json:providers.claude.model
+    — anthropic.NotFoundError status=404 :: ... 'message': 'model: claude-3-5-sonnet-20241022'
+  WARNING model preflight FAILED: gemini/gemini-1.0-pro (configured, currently unused) class=retired_or_unknown
+    — fix in: brain/config/routing_config.json:providers.gemini.upgrade_model — ... status=404
+  WARNING model preflight: 3 ok, 2 failed
+  ```
+  brain 照常啟動、`/health` ok；還原設定重啟後回到 `4 ok, 0 failed`。（注入僅在容器內，repo 未動。）
+- **注入 2**（local 離線）：黑洞位址 → 10s timeout、拒絕連線 → `openai.APIConnectionError`，
+  兩者皆歸 `unreachable`，以 INFO「local MLX server offline (expected when chrysoberyl is down)」記錄。
+- **注入 3**（`MODEL_PREFLIGHT_ENABLED=false`）：直接驅動 lifespan 驗證，只有一行
+  `Model preflight skipped`，對 provider 零 HTTP 呼叫，`app.state.model_preflight` 維持 None。
+- **Task 4 實證**：修前 router 對 Claude 的第一次呼叫因 `thinking_budget`（而非 `model`）撞
+  TypeError，覆寫從未生效；修後把 config 改為 `claude-haiku-4-5-20251001`，API 回應 `model`
+  同為 haiku。不傳 model 時仍為 `claude-sonnet-4-6`。
+- **憑證失效分類**：Claude 401 → `unauthorized`；Gemini 無效 key 回 400 INVALID_ARGUMENT
+  「API key not valid」，依訊息亦歸 `unauthorized`。三 provider 全掛時函式正常回傳、不 raise。
 
 ---
 
@@ -196,3 +225,4 @@ shutdown 段把該 task 加進既有 cancel 迴圈。
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-09-19 | Initial proposal（含查碼三發現：第三處 retired id、Claude `model` 死設定、`upgrade_model` 零引用） |
+| 1.1 | 2026-09-19 | 全 6 tasks 完成並實機驗證。修正發現 2 的描述：觸發 TypeError 的是 `thinking_budget`；ClaudeClient 一併補齊並回報實際 model id |
