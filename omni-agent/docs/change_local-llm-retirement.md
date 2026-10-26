@@ -208,9 +208,30 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 未測：額度用罄 `response.failed` 路徑（無法人為觸發，於 5c 以 monkeypatch 模擬 fallback）。
 
 #### 5c：路由切換（動 routing_config 前再向 admin 確認）
-- [ ] `fallback_chain` → `["chatgpt", "gemini", "claude"]`；`image_input`／`sticker_perception` → chatgpt
-- [ ] 語音、影片維持 Gemini（router 既有 multimodal 強制路徑）
+- [x] `fallback_chain` → `["chatgpt", "gemini", "claude"]`；`image_input`／`sticker_perception` → chatgpt
+- [x] 語音、影片維持 Gemini（router 既有 multimodal 強制路徑）
 - [ ] 實機驗收：文字＋工具、照片、貼圖、語音、影片各一；額度錯誤模擬時文字落 Gemini
+
+**5c 結果（2026-10-26 11:34–11:47，Telegram 實機）**：admin 核准後新增 `providers.chatgpt`（gpt-6.1-sol）、
+`fallback_chain` = `["chatgpt","gemini","claude"]`、image／sticker 規則 → chatgpt；preflight 4 ok（1 failed = local 離線）。
+
+| 測項 | turn | 耗時 | 路徑 |
+|---|---|---|---|
+| 文字（CP/M 問答） | 64b50c78 | 28s | `executor_chosen: chatgpt`，長答 |
+| 文字（CBM） | 7755f347 | 23s | chatgpt |
+| 語音 | 45db86d2→b03d3c87 | — | faster-whisper → chatgpt（被後續訊息合併） |
+| TG 貼圖 | b03d3c87 | 40s | `sticker_perception: routed to chatgpt` |
+| 照片（日文資訊圖） | d265b325 | **69s** | OCR chatgpt 26.6s → OCR 足夠性判斷 **gemini（file_analyzer 寫死）** 9s → reporter chatgpt；內容解讀正確且完整 |
+
+- 期間 fallback／error 皆 0；新訊息觸發撤回時 ChatGPT 串流正常關閉（`chatgpt turn cancelled — closing stream`）。
+- 合併 turn 只分析最後一個附件（main.py:812-816 既有設計）→ 照片被佔位字取代，另卡 `multi-attachment-turn`。
+- **延遲優化**：gpt-6.1-sol 為推理模型，預設 effort medium。實測同一張圖 OCR：sol 預設 29.2s／sol low 20.0s（輸出相同）／
+  luna low 15.0s（漏字）。採 sol＋low：`thinking_budget == 0`（routing 規則感知快路徑）→ `reasoning.effort: "low"`，
+  file_analyzer 的 `_vision_chat`／`_perceive_image` 改為傳遞規則的 `thinking_budget`。
+- 待辦（Task 7 一併處理）：file_analyzer 多處寫死 `provider="gemini"`（OCR 足夠性判斷、PDF 摘要、語音備援、升級保底），
+  違反 CLAUDE.md「不得寫死」；退役清理時改走預設 provider 或規則。
+- admin 確認：個人寫程式主力非 Codex，Plus 額度可全數投入 Cindy（Task 6 額度顧慮解除）。
+- 未完成：影片實測（應維持 Gemini）、套用 effort low 後的照片延遲複測。
 
 **Acceptance Criteria（整體）：**
 - [ ] Telegram／LINE 一般 turn 由 chatgpt 回覆，延遲不劣於 Gemini 主力時期
@@ -287,3 +308,4 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 | 1.4 | 2026-10-26 | Task 5 由「ChatGPT 評估」改為「ChatGPT Plus 接入為主力」（5a spike／5b client／5c 路由），依官方 SIWC 文件補技術約束 |
 | 1.5 | 2026-10-26 | 5a spike 完成：OAuth／模型清單／instructions／namespace tool 迴圈／圖片／refresh 皆通過，記錄串流收集 output items 等實作要點 |
 | 1.6 | 2026-10-26 | 5b 完成：ChatGPTClient 實作、router 註冊、compose 掛載憑證，容器內 smoke 通過 |
+| 1.7 | 2026-10-26 | 5c 路由切換 ChatGPT 主力並實機驗收；感知類改 reasoning effort low |
