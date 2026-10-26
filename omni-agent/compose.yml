@@ -53,6 +53,9 @@ services:
       - terminal-logs:/terminal-logs
       # A2A 產物交換共享 volume：brain 寫長輸入、讀回大產物（與 agy 同掛，提案 D2）
       - a2a-workspace:/a2a-workspace
+      # ChatGPT Plus（Sign in with ChatGPT）憑證：主機 scripts/siwc_login.py 產生；掛整個目錄且 rw，
+      # brain 負責 refresh 輪替並原子寫回（rename 需要目錄寫入權）
+      - ${SIWC_DIR:-${HOME}/.config/omni-agent/siwc}:/siwc
     depends_on:
       postgres:
         condition: service_healthy
@@ -67,6 +70,8 @@ services:
       AGY_A2A_URL: http://agy:8000
       # 與 AGY 共享的產物交換目錄（brain 端掛載路徑）
       A2A_WORKSPACE: /a2a-workspace
+      # ChatGPT provider 憑證檔（檔案不存在則不註冊該 provider）
+      SIWC_CREDENTIALS: /siwc/credentials.json
 
   skills:
     build:

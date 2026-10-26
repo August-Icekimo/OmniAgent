@@ -26,6 +26,7 @@ _CLIENT_FILES = {
     "claude": "brain/llm/claude_client.py",
     "gemini": "brain/llm/gemini_client.py",
     "local": "brain/llm/local_client.py",
+    "chatgpt": "brain/llm/chatgpt_client.py",
 }
 
 

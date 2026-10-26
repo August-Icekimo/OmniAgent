@@ -9,7 +9,7 @@ CHECK_MODEL_TIMEOUT = 10.0
 
 
 class ModelIdMismatch(Exception):
-    """伺服器在線，但設定的 model id 不在其服務清單中（local provider 專用）。"""
+    """伺服器在線，但設定的 model id 不在其服務清單中（local／chatgpt：以模型清單比對的 provider）。"""
 
     def __init__(self, model_id: str, served: list[str]):
         self.model_id = model_id

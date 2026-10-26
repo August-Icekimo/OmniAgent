@@ -9,6 +9,7 @@ from .base import ModelClient, Message, LLMResponse
 from .claude_client import ClaudeClient
 from .gemini_client import GeminiClient
 from .local_client import LocalClient
+from .chatgpt_client import ChatGPTClient
 from config.config_loader import load_routing_config
 
 logger = logging.getLogger(__name__)
@@ -349,6 +350,14 @@ def create_default_router() -> ModelRouter:
     if os.environ.get("GEMINI_API_KEY"):
         router.register(GeminiClient())
         logger.info("Gemini API Key provider enabled")
+
+    # ChatGPT Plus（Sign in with ChatGPT）：憑證檔由主機 scripts/siwc_login.py 產生並掛入容器，
+    # 檔案存在才註冊（未登入的環境不受影響）
+    siwc_path = os.environ.get("SIWC_CREDENTIALS")
+    if siwc_path and os.path.exists(siwc_path):
+        chatgpt_config = config.get("providers", {}).get("chatgpt", {})
+        router.register(ChatGPTClient(model=chatgpt_config.get("model")))
+        logger.info("ChatGPT (SIWC) provider enabled")
 
     if os.environ.get("MLX_BASE_URL"):
         is_test = os.environ.get("OMNI_ENV") == "test"

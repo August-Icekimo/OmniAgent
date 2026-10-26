@@ -192,14 +192,20 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 - refresh：成功且 refresh token 已輪替，新 access token 可用
 
 #### 5b：`ChatGPTClient`（brain/llm/chatgpt_client.py）
-- [ ] 實作 `ModelClient` 介面：`Message` → Responses `input` items（system → `instructions`；`Role.TOOL` → `function_call_output`；
+- [x] 實作 `ModelClient` 介面：`Message` → Responses `input` items（system → `instructions`；`Role.TOOL` → `function_call_output`；
       assistant tool_calls → `function_call` items；image parts → `input_image`）；`ToolSpec` → namespace 包裝
-- [ ] 忽略（不送出）`temperature`／`max_tokens`；`thinking_budget` 不對應（reasoning effort 用 provider 預設）
-- [ ] 串流讀到 `response.completed` 才算成功；`response.failed`／`incomplete`／中斷 → 拋例外交給 router fallback
-- [ ] token 管理：到期前 refresh、跨協程序列化、原子寫回；refresh 終端錯誤 → WARNING 並停用 provider（不刪憑證）
-- [ ] `supports_vision()` True；`check_model()` 走 `/v1/models` 供 preflight 使用
-- [ ] 憑證以唯讀 volume 掛入 brain（compose.yml），以 env 指定路徑；檔案不存在則不註冊 provider（同 local 的註冊模式）
-- [ ] 不在 log 中輸出任何 token
+- [x] 忽略（不送出）`temperature`／`max_tokens`；`thinking_budget` 不對應（reasoning effort 用 provider 預設）
+- [x] 串流讀到 `response.completed` 才算成功；`response.failed`／`incomplete`／中斷 → 拋例外交給 router fallback
+- [x] token 管理：到期前 refresh、跨協程序列化、原子寫回；refresh 終端錯誤 → WARNING 並停用 provider（不刪憑證）
+- [x] `supports_vision()` True；`check_model()` 走 `/v1/models` 供 preflight 使用
+- [x] 憑證以唯讀 volume 掛入 brain（compose.yml），以 env 指定路徑；檔案不存在則不註冊 provider（同 local 的註冊模式）
+- [x] 不在 log 中輸出任何 token
+
+**5b 結果（2026-10-26 11:31–11:33）**：[chatgpt_client.py](../brain/llm/chatgpt_client.py) 以官方 `openai` SDK（2.54，
+`responses.create(stream=True)`）實作；router 依 `SIWC_CREDENTIALS` 檔存在與否註冊；compose 掛 `~/.config/omni-agent/siwc:/siwc`（rw，refresh 寫回）。
+brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字＋instructions、內部 `Message` 多輪 tool 迴圈
+（`function_call` → `Role.TOOL` → 最終回覆）、圖片、強制 refresh 後續推論皆通過；refresh 寫回維持 0600。
+未測：額度用罄 `response.failed` 路徑（無法人為觸發，於 5c 以 monkeypatch 模擬 fallback）。
 
 #### 5c：路由切換（動 routing_config 前再向 admin 確認）
 - [ ] `fallback_chain` → `["chatgpt", "gemini", "claude"]`；`image_input`／`sticker_perception` → chatgpt
@@ -280,3 +286,4 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 | 1.3 | 2026-10-26 | Task 3 實機驗收全數通過（文字／照片／貼圖／語音＋故障模擬），階段 1 完成 |
 | 1.4 | 2026-10-26 | Task 5 由「ChatGPT 評估」改為「ChatGPT Plus 接入為主力」（5a spike／5b client／5c 路由），依官方 SIWC 文件補技術約束 |
 | 1.5 | 2026-10-26 | 5a spike 完成：OAuth／模型清單／instructions／namespace tool 迴圈／圖片／refresh 皆通過，記錄串流收集 output items 等實作要點 |
+| 1.6 | 2026-10-26 | 5b 完成：ChatGPTClient 實作、router 註冊、compose 掛載憑證，容器內 smoke 通過 |
