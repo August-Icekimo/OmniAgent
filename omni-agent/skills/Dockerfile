@@ -1,4 +1,4 @@
-FROM docker.io/library/golang:1.26-alpine AS builder
+FROM docker.io/library/golang:1.26.10-alpine AS builder
 
 WORKDIR /app
 COPY go.mod ./
@@ -6,7 +6,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o skills-server .
 
-FROM docker.io/library/alpine:latest
+FROM docker.io/library/alpine:3.24
 WORKDIR /root/
 COPY --from=builder /app/skills-server .
 EXPOSE 8001
