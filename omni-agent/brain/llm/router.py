@@ -262,7 +262,7 @@ class ModelRouter:
                  if any(p.get("type") in ("audio", "video") for p in m.content):
                      has_audio_video = True
 
-        for i, target in enumerate(candidates):
+        for target in candidates:
             client = self._clients.get(target)
             if not client:
                 continue
@@ -290,8 +290,10 @@ class ModelRouter:
             else:
                 target_max_tokens = config_max_tokens or 4096
 
-            if i > 0:
-                logger.warning(f"Fallback triggered: {candidates[0]} failed (likely Quota/429), trying {target}...")
+            # 只有前面有 provider 實際呼叫失敗才算 fallback；能力閘門跳過（如影片略過 chatgpt）不算，
+            # 否則會誤記 WARNING 並替正常路徑的結果加上 🤔
+            if last_error is not None:
+                logger.warning(f"Fallback triggered: previous provider failed ({type(last_error).__name__}), trying {target}...")
                 fallback_triggered = True
 
             logger.info(f"Router: attempting {target} with model {target_model}")
