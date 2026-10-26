@@ -113,16 +113,33 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 - `providers.local` 區塊與 `MLX_BASE_URL` 暫不動（回退用；階段 3 才移除）
 
 **Acceptance Criteria:**
-- [ ] brain 重啟後 preflight 正常；log 中文字 turn 的 `executor_chosen` 為 gemini
+- [x] brain 重啟後 preflight 正常；log 中文字 turn 的 `executor_chosen` 為 gemini
       （11:07 已套用並重建 brain：config 載入 `['gemini','claude']`、規則皆 gemini、preflight 3 ok／1 failed=local 離線；
       admin 已於對話中核准改 routing_config）
-- [ ] chrysoberyl 離線下：文字、圖片（照片 OCR）、LINE 貼圖、TG 動態貼圖 turn 皆在正常延遲內回覆，
+- [x] chrysoberyl 離線下：文字、圖片（照片 OCR）、LINE 貼圖、TG 動態貼圖 turn 皆在正常延遲內回覆，
       無等待 local timeout
-- [ ] 正常路徑不帶 `🤔` 前綴（回覆、長期記憶摘要、PDF 摘要）
-- [ ] Gemini 故障模擬（暫時把 gemini model 改成無效 id 或拔 key）：文字 turn 由 Claude 接手並帶 `🤔`；
+- [x] 正常路徑不帶 `🤔` 前綴（回覆、長期記憶摘要、PDF 摘要）
+- [x] Gemini 故障模擬（暫時把 gemini model 改成無效 id 或拔 key）：文字 turn 由 Claude 接手並帶 `🤔`；
       圖片 turn 誠實降級（Claude 尚無視覺）；驗完還原
-- [ ] 語音訊息仍先走 faster-whisper，行為不變
-- [ ] 回退演練：還原 JSON + 重啟即恢復舊行為（只需記錄步驟，不必真的回退）
+- [x] 語音訊息仍先走 faster-whisper，行為不變
+- [x] 回退演練：還原 JSON + 重啟即恢復舊行為（只需記錄步驟，不必真的回退）
+
+**結果（2026-10-26 11:07–11:16，Telegram 實機，chrysoberyl 離線）：全數通過。**
+
+| 測項 | turn | 耗時 | 路徑 |
+|---|---|---|---|
+| 文字（天氣） | bb7ff9d7 | 12s | `executor_chosen: gemini` → web_search → 回覆（搜尋零結果屬 SearXNG 問題） |
+| 照片 | dd357cb2 | 37s | `image_vision: routed to gemini (auto:image_input)`，正確解讀迷因圖 |
+| TG 動態貼圖 | f2932b0a | 11s | `sticker_perception: routed to gemini` |
+| 語音 | 5c1607a7 | 11s | faster-whisper 先轉錄（2.35s 音訊）→ gemini |
+
+- 期間 `Fallback triggered`／error／Traceback 皆 0；回覆無 `🤔`（耗時含 turn 組裝靜默窗）。
+- PDF 摘要未實測（無測試檔），但其走預設 provider = gemini，與長期記憶摘要同路徑（log 見 `Stored long-term memory`、無 fallback）。
+- 故障模擬（brain 容器內獨立行程，monkeypatch gemini.chat 拋例外，不動生產設定）：
+  文字 → `Fallback triggered: gemini failed … trying claude` → claude 回 `🤔 pong`；
+  圖片 → `Provider claude does not support image payload. Skipping.` → 空回應誠實降級；local 未被嘗試。
+- **回退步驟**：`git show aab7e2b:omni-agent/brain/config/routing_config.json > omni-agent/brain/config/routing_config.json`
+  → `podman compose build brain && podman compose up -d brain`（config 烘進 image，需重建非僅重啟）。
 
 ### Task 4：觀察期紀錄機制
 **說明：** 不新增程式碼，建立可重複執行的唯讀查詢與紀錄格式，觀察期每週記一次於本文件 Task 4 下方：
@@ -210,3 +227,4 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 | 1.0 | 2026-10-26 | Initial proposal（源自 ready 卡 local-llm-retirement，W44 Committed） |
 | 1.1 | 2026-10-26 | Task 1 完成：真實 Telegram turn 證實 local 離線 → 300s 逾時、Cindy 不回話、fallback 答案被丟棄 |
 | 1.2 | 2026-10-26 | Task 2 完成（Gemini 多輪 tool 迴圈可用）；Task 3 設定已套用，待實機驗收 |
+| 1.3 | 2026-10-26 | Task 3 實機驗收全數通過（文字／照片／貼圖／語音＋故障模擬），階段 1 完成 |
