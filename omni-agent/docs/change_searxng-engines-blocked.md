@@ -72,8 +72,13 @@ mock 部分失效有結果 → 行為不變。
 
 ### Task 3：實機驗收
 **Acceptance Criteria:**
-- [ ] Telegram 問天氣：Cindy（ChatGPT 主力）呼叫 web_search 取得結果並據以回答，引用權威來源
-- [ ] brain log `SearXNG search '...': N results`，N ≥ 1
+- [x] Telegram 問天氣：Cindy（ChatGPT 主力）呼叫 web_search 取得結果並據以回答，引用權威來源
+- [x] brain log `SearXNG search '...': N results`，N ≥ 1
+
+**Task 3 結果（2026-10-26 12:06，Telegram 問颱風）**：turn `e9a55f45` 30s delivered。Sol 4s 內呼叫 `web_search`
+（「2026年10月26日 颱風 中央氣象署…」→ 45 raw／取 5），自行改寫查詢再搜一次（43 raw／取 5），
+最終回覆正確指出「煙花」颱風已生成、引用中央氣象署 10/26 凌晨預報，附數位時代與氣象署連結。
+duckduckgo CAPTCHA 僅記 INFO，不影響結果。
 
 ---
 
@@ -97,3 +102,4 @@ mock 部分失效有結果 → 行為不變。
 |---|---|---|
 | 1.0 | 2026-10-26 | Initial proposal（源自 ready 卡 searxng-engines-blocked，W44 WIP=1 例外） |
 | 1.1 | 2026-10-26 | Task 1–2 完成 |
+| 1.2 | 2026-10-26 | Task 3 實機驗收通過，全部完成 |
