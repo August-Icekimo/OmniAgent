@@ -104,6 +104,7 @@ class FileAnalyzer:
         response = await self.router.chat(
             [Message(role=Role.USER, content=content)],
             provider=decision["provider"],
+            thinking_budget=decision.get("thinking_budget"),
             caller=caller,
         )
 
@@ -239,6 +240,7 @@ class FileAnalyzer:
         response = await self.router.chat(
             [Message(role=Role.USER, content=content)],
             provider=decision["provider"],
+            thinking_budget=decision.get("thinking_budget"),
             max_tokens=PERCEPTION_MAX_TOKENS,
             caller=caller,
         )

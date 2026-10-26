@@ -232,11 +232,15 @@ class ChatGPTClient(ModelClient):
         thinking_budget: int | None = None,
         model: str | None = None,
     ) -> LLMResponse:
-        # temperature / max_tokens / thinking_budget：此路徑不支援（送出會 400），接受但忽略以維持介面一致
+        # temperature / max_tokens：此路徑不支援（送出會 400），接受但忽略以維持介面一致
         instructions, items = _to_responses_input(messages, system_prompt)
         kwargs: dict = {"model": model or self._model, "input": items, "store": False, "stream": True}
         if instructions:
             kwargs["instructions"] = instructions
+        # thinking_budget=0（routing 規則標記的感知類快路徑）→ reasoning effort low；
+        # 實測 OCR 29s → 20s、輸出不變（2026-10-26）。其餘維持模型預設（medium）
+        if thinking_budget == 0:
+            kwargs["reasoning"] = {"effort": "low"}
         resp_tools = _tools_to_responses(tools)
         if resp_tools:
             kwargs["tools"] = resp_tools
