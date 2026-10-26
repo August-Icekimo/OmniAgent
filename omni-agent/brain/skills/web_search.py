@@ -82,6 +82,18 @@ class SearXNGWebSearchProvider(WebSearchProvider):
             return {"success": False, "error": "SearXNG 回應不是合法 JSON"}
 
         raw_results = data.get("results", [])
+        # unresponsive_engines: [[engine, reason], ...]（CAPTCHA、限流 suspend、逾時…）
+        unresponsive = [f"{e}: {reason}" for e, reason in data.get("unresponsive_engines", [])]
+
+        if not raw_results and unresponsive:
+            # 零結果但有引擎失效 → 多半是引擎被封而非查無資料；回報錯誤讓模型告知「搜尋暫時不可用」
+            logger.warning(f"SearXNG search '{query}': 0 results, engines unresponsive: {unresponsive}")
+            return {
+                "success": False,
+                "error": "搜尋引擎暫時無法使用（" + "；".join(unresponsive) + "），請稍後再試",
+            }
+        if unresponsive:
+            logger.info(f"SearXNG partial engine failures (results still returned): {unresponsive}")
 
         # SearXNG 帶 score 欄位：降冪排序後截到 limit
         sorted_results = sorted(
