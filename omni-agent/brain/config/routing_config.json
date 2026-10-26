@@ -1,5 +1,11 @@
 {
   "providers": {
+    "chatgpt": {
+      "model": "gpt-6.1-sol",
+      "enabled": true,
+      "skip_in_test": true,
+      "context_length": 1050000
+    },
     "gemini": {
       "model": "gemini-2.5-flash",
       "enabled": true,
@@ -29,19 +35,20 @@
     {
       "name": "image_input",
       "condition": "message_type == 'image'",
-      "provider": "gemini",
+      "provider": "chatgpt",
       "thinking_budget": 0,
       "priority": 100
     },
     {
       "name": "sticker_perception",
       "condition": "message_type in ('sticker', 'animation')",
-      "provider": "gemini",
+      "provider": "chatgpt",
       "thinking_budget": 0,
       "priority": 90
     }
   ],
   "fallback_chain": [
+    "chatgpt",
     "gemini",
     "claude"
   ],
