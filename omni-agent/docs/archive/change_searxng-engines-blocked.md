@@ -103,3 +103,4 @@ duckduckgo CAPTCHA 僅記 INFO，不影響結果。
 | 1.0 | 2026-10-26 | Initial proposal（源自 ready 卡 searxng-engines-blocked，W44 WIP=1 例外） |
 | 1.1 | 2026-10-26 | Task 1–2 完成 |
 | 1.2 | 2026-10-26 | Task 3 實機驗收通過，全部完成 |
+| 1.3 | 2026-10-26 | Archived — implementation complete |
