@@ -210,7 +210,7 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 #### 5c：路由切換（動 routing_config 前再向 admin 確認）
 - [x] `fallback_chain` → `["chatgpt", "gemini", "claude"]`；`image_input`／`sticker_perception` → chatgpt
 - [x] 語音、影片維持 Gemini（router 既有 multimodal 強制路徑）
-- [ ] 實機驗收：文字＋工具、照片、貼圖、語音、影片各一；額度錯誤模擬時文字落 Gemini
+- [x] 實機驗收：文字＋工具、照片、貼圖、語音、影片各一；額度錯誤模擬時文字落 Gemini
 
 **5c 結果（2026-10-26 11:34–11:47，Telegram 實機）**：admin 核准後新增 `providers.chatgpt`（gpt-6.1-sol）、
 `fallback_chain` = `["chatgpt","gemini","claude"]`、image／sticker 規則 → chatgpt；preflight 4 ok（1 failed = local 離線）。
@@ -231,11 +231,14 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 - 待辦（Task 7 一併處理）：file_analyzer 多處寫死 `provider="gemini"`（OCR 足夠性判斷、PDF 摘要、語音備援、升級保底），
   違反 CLAUDE.md「不得寫死」；退役清理時改走預設 provider 或規則。
 - admin 確認：個人寫程式主力非 Codex，Plus 額度可全數投入 Cindy（Task 6 額度顧慮解除）。
-- 未完成：影片實測（應維持 Gemini）、套用 effort low 後的照片延遲複測。
+- 複測（effort low 套用後，11:50–11:52）：照片（迷因圖）turn `0756171f` **33s**（原 69s；OCR chatgpt 4.5s → 足夠性 gemini 4s →
+  Stage 2 chatgpt 10s → reporter 8s）；影片 turn `6e8fd1bd` 30s，能力閘門跳過 chatgpt → gemini 17s 分析 → reporter chatgpt，內容正確。
+- 修正：能力閘門「跳過」原被誤計為 fallback（誤記 `Fallback triggered … Quota/429` WARNING 並替影片分析結果加 `🤔`）→
+  router 改為只有前一 provider 實際拋例外才算 fallback；容器內驗證影片跳過無 🤔、chatgpt 真故障仍 fallback 並帶 🤔。
 
 **Acceptance Criteria（整體）：**
-- [ ] Telegram／LINE 一般 turn 由 chatgpt 回覆，延遲不劣於 Gemini 主力時期
-- [ ] ChatGPT 額度用罄／token 失效時 Cindy 仍會回覆（Gemini／Claude 接手）
+- [ ] Telegram／LINE 一般 turn 由 chatgpt 回覆，延遲不劣於 Gemini 主力時期（**未達**：文字 20–30s、照片 33s，Gemini 時期 11–12s；推理模型的代價，觀察期評估是否可接受）
+- [x] ChatGPT 額度用罄／token 失效時 Cindy 仍會回覆（Gemini／Claude 接手）（monkeypatch 模擬）
 - [ ] 重啟 brain 後無需重新登入（refresh 正常輪替）
 
 ### Task 6：觀察期結論與退役決定
@@ -309,3 +312,4 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 | 1.5 | 2026-10-26 | 5a spike 完成：OAuth／模型清單／instructions／namespace tool 迴圈／圖片／refresh 皆通過，記錄串流收集 output items 等實作要點 |
 | 1.6 | 2026-10-26 | 5b 完成：ChatGPTClient 實作、router 註冊、compose 掛載憑證，容器內 smoke 通過 |
 | 1.7 | 2026-10-26 | 5c 路由切換 ChatGPT 主力並實機驗收；感知類改 reasoning effort low |
+| 1.8 | 2026-10-26 | 照片／影片複測通過；修正能力閘門跳過被誤計 fallback |
