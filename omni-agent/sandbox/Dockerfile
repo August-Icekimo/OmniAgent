@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.13.17-slim
 
 # 沙箱常用唯讀工具（coreutils 已內建；procps 提供 ps/free/uptime，curl 供連線測試）
 RUN apt-get update && apt-get install -y --no-install-recommends \

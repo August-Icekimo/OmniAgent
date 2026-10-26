@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.13.17-slim
 
 # 連線測試用 curl（healthcheck / 除錯）；保持精簡以縮小攻擊面。
 RUN apt-get update && apt-get install -y --no-install-recommends \

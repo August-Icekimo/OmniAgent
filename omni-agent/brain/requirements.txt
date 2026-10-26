@@ -3,10 +3,10 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 
 # LLM SDKs — 原廠直連
-anthropic>=0.52.0
+anthropic>=0.52.0,<1  # 2.x 的 messages.create 移除 temperature（2026-10-26 實測 TypeError），升級需改 claude_client
 google-genai>=1.12.0
 google-auth>=2.35.0
-openai>=1.78.0
+openai>=1.78.0,<3  # 3.x 未經 local MLX 路徑驗證，先釘 2.x
 
 # Database (Phase 3 預備)
 asyncpg>=0.30.0
@@ -26,6 +26,7 @@ pydantic>=2.11.0
 python-dotenv>=1.1.0
 httpx>=0.27.0
 faster-whisper>=1.0.0
+av<18  # faster-whisper 1.2.1 與 av 19 不相容（open() metadata_errors TypeError，2026-10-26 實測）
 pypdf>=4.0.0
 openpyxl>=3.1.0
 pandas>=2.0.0
