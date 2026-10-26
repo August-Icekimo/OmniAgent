@@ -62,9 +62,26 @@ prefill cap 8192、abort 假確認、thought-marker workaround、chrysoberyl 常
 webhook 進件正常（09-15 後 `message_queue` 零筆的原因）。
 
 **Acceptance Criteria:**
-- [ ] 訊息出現在 `message_queue` / `turns`（證明 webhook 進件正常；否則先修進件再繼續）
-- [ ] 記錄實際結果：local 嘗試耗時、是否逾時、最終由哪個 provider 回覆、回覆是否帶 `🤔`
-- [ ] 結論寫入本文件 Task 1 下方（推論成立／不成立＋log 摘錄）
+- [x] 訊息出現在 `message_queue` / `turns`（證明 webhook 進件正常；否則先修進件再繼續）
+- [x] 記錄實際結果：local 嘗試耗時、是否逾時、最終由哪個 provider 回覆、回覆是否帶 `🤔`
+- [x] 結論寫入本文件 Task 1 下方（推論成立／不成立＋log 摘錄）
+
+**結果（2026-10-26，chrysoberyl 離線，現行設定）：推論成立，且比推論更糟。**
+
+| 時間 (CST) | 事件 |
+|---|---|
+| 10:51:17 | `POST /webhook/telegram` 200 → gateway dispatch turn `bc8b9d53` → brain `/turn` 202。**進件正常** |
+| 10:51:18 | planner `executor_chosen: local` → `Router: attempting local` |
+| 10:53:18 | openai SDK `Retrying request to /chat/completions`（第 1 次重試，120s 逾時） |
+| 10:55:18 | 第 2 次重試 |
+| **10:56:17** | **`turn processing timed out` → turn `failed`、message_queue `failed`，使用者無回覆** |
+| 10:57:19 | 被 abandon 的背景 task：`Provider local failed: Request timed out.`（local 共卡 **361s**）→ fallback gemini |
+| 10:57:22 | gemini 200 OK（3.4s）、`Provider fallback: local -> gemini` — **答案產出但 turn 已 failed，`result` 為空、`delivery_attempts` 0，回覆被丟棄** |
+
+- 09-15 後零筆 = 期間無人傳訊（進件本身沒壞）。
+- 使用者未收到回覆而重傳 → 第二則 turn `ff866b18`（10:56:45）同樣路由 local，重演同一路徑。
+- 額外發現：逾時後背景 task 仍會跑完並付費呼叫雲端，結果卻無處交付（abandon-pattern 的副作用；
+  Task 3 移除 local 後此情境不再發生，不另開修正）。
 
 ### Task 2：Gemini 多輪 tool calling smoke test
 **說明：** 單輪 `tool_call` 已 OK；驗證完整迴圈：Gemini 發 function_call → tools_node 執行
@@ -72,10 +89,20 @@ webhook 進件正常（09-15 後 `message_queue` 零筆的原因）。
 用 `/provider gemini <需要工具的請求>` 在真實 turn 上觸發（例如 web_search 類問題）。
 
 **Acceptance Criteria:**
-- [ ] 至少一個需工具的請求完成 ≥2 輪（call → response → 最終文字），回覆內容正確引用工具結果
+- [x] 至少一個需工具的請求完成 ≥2 輪（call → response → 最終文字），回覆內容正確引用工具結果
 - [ ] 同名工具在同一輪被呼叫多次時，回填配對不出錯（Gemini 無 call id，依名稱配對）
 - [ ] 若失敗：記錄錯誤，修 [gemini_client.py](../brain/llm/gemini_client.py) 後重測；修不好則 Task 3 改為
       「文字 Claude 主力」並回報 admin 決定
+
+**結果（2026-10-26 11:06，Telegram `/provider gemini 今天台北天氣如何？`）：多輪迴圈可用。**
+turn `17753004` 10s 內 delivered：gemini 發 `web_search` function_call → tools_node 執行 →
+functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有找到任何搜尋結果」）。
+- 搜尋零結果非 Gemini 問題：SearXNG 三個引擎全被封（brave `Suspended: too many requests`、
+  duckduckgo／startpage `CAPTCHA`）→ 另卡 `searxng-engines-blocked`。
+- 小瑕疵：模型說「讓我再試一次」卻直接結束 turn 未再呼叫工具（模型行為，暫不處理）。
+- 同名工具多次呼叫的配對 AC 未觸發到，留待觀察期自然流量驗證。
+- 驗證過程發現：`/provider` 覆蓋在 turn 組裝合併多則訊息時失效（graph.py 只檢查合併後文字開頭）
+  → 另卡 `provider-override-merged-turn`。
 
 ### Task 3：路由改為 Gemini 主力、Claude 備援（階段 1 核心）
 **說明：** 只改 [routing_config.json](../brain/config/routing_config.json)（依 CLAUDE.md 規則，動手前再向 admin 確認一次）：
@@ -87,6 +114,8 @@ webhook 進件正常（09-15 後 `message_queue` 零筆的原因）。
 
 **Acceptance Criteria:**
 - [ ] brain 重啟後 preflight 正常；log 中文字 turn 的 `executor_chosen` 為 gemini
+      （11:07 已套用並重建 brain：config 載入 `['gemini','claude']`、規則皆 gemini、preflight 3 ok／1 failed=local 離線；
+      admin 已於對話中核准改 routing_config）
 - [ ] chrysoberyl 離線下：文字、圖片（照片 OCR）、LINE 貼圖、TG 動態貼圖 turn 皆在正常延遲內回覆，
       無等待 local timeout
 - [ ] 正常路徑不帶 `🤔` 前綴（回覆、長期記憶摘要、PDF 摘要）
@@ -179,3 +208,5 @@ webhook 進件正常（09-15 後 `message_queue` 零筆的原因）。
 | Version | Date | Changes |
 |---|---|---|
 | 1.0 | 2026-10-26 | Initial proposal（源自 ready 卡 local-llm-retirement，W44 Committed） |
+| 1.1 | 2026-10-26 | Task 1 完成：真實 Telegram turn 證實 local 離線 → 300s 逾時、Cindy 不回話、fallback 答案被丟棄 |
+| 1.2 | 2026-10-26 | Task 2 完成（Gemini 多輪 tool 迴圈可用）；Task 3 設定已套用，待實機驗收 |

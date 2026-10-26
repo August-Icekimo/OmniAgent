@@ -29,40 +29,21 @@
     {
       "name": "image_input",
       "condition": "message_type == 'image'",
-      "provider": "local",
+      "provider": "gemini",
       "thinking_budget": 0,
       "priority": 100
     },
     {
       "name": "sticker_perception",
       "condition": "message_type in ('sticker', 'animation')",
-      "provider": "local",
+      "provider": "gemini",
       "thinking_budget": 0,
       "priority": 90
-    },
-    {
-      "name": "short_simple",
-      "condition": "text_length < 50 AND no_skill_intent",
-      "provider": "local",
-      "priority": 80
-    },
-    {
-      "name": "skill_execution",
-      "condition": "has_skill_intent",
-      "provider": "local",
-      "priority": 60
-    },
-    {
-      "name": "default",
-      "condition": "*",
-      "provider": "local",
-      "priority": 0
     }
   ],
   "fallback_chain": [
     "gemini",
-    "claude",
-    "local"
+    "claude"
   ],
   "upgrade_rules": [],
   "upgrade_quota": {
