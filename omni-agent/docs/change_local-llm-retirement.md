@@ -147,13 +147,33 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 **說明：** 不新增程式碼，建立可重複執行的唯讀查詢與紀錄格式，觀察期每週記一次於本文件 Task 4 下方：
 - turn 結果：`turns` 依 `status` 計數（delivered／cancelled／undeliverable／逾時失敗）
 - provider 分布：`conversations.messages` 中 assistant 訊息的 `provider`／`model` 計數
-- 延遲：brain log `planner_timing` 的 `total_ms`（p50／p95）
+- 延遲：`turns.updated_at - created_at`（delivered；含 turn 組裝靜默窗）p50／max
+  （原訂 `planner_timing.total_ms` 只量路由決策 ≈0.05ms，非使用者感受延遲，2026-10-26 改正）
 - fallback 次數：brain log `Fallback triggered` 計數
-- 花費：AI Studio Spend 與 Anthropic Console（手動讀數）
+- 花費：AI Studio Spend、Anthropic Console、ChatGPT Settings → Usage（手動讀數）
 
 **Acceptance Criteria:**
-- [ ] 查詢指令寫入本文件 Testing Notes，可直接複製執行
-- [ ] 第一筆紀錄（Task 3 完成當週）已填
+- [x] 查詢指令寫入本文件 Testing Notes，可直接複製執行
+- [x] 第一筆紀錄（Task 3 完成當週）已填
+
+#### 觀察紀錄
+
+**#1 — 2026-10-26（基準日；全為 admin 實機驗收流量，非家人自然使用）**
+
+| 時段 | 主力 | delivered | failed | cancelled | 延遲 p50 | 延遲 max |
+|---|---|---|---|---|---|---|
+| ~11:07 | local（離線） | 1 | **2** | 1 | 10.0s | 10.0s |
+| 11:07–11:34 | gemini | 4 | 0 | 0 | 11.5s | 37.0s |
+| 11:34~ | chatgpt | 7 | 0 | 2 | **30.0s** | 69.0s |
+
+- local 期：2 筆 failed 即 Task 1 的 300s 逾時；唯一 delivered 是 `/provider gemini` 覆蓋那筆。
+- chatgpt 期：cancelled 2 筆皆為使用者連發訊息觸發的合併撤回（正常行為），非故障；max 69s 為套用 effort low 前的照片（複測 33s）。
+- provider 分布（assistant 訊息）：chatgpt/gpt-6.1-sol 7、gemini/gemini-2.5-flash 5（影片分析的 gemini 呼叫不計入，最終回覆由 chatgpt 產出）。
+- brain log（12:04 重建後）：`Fallback triggered` 0、ChatGPT token refresh 0、web_search 引擎全滅 0。
+  **限制**：log 計數只涵蓋當前容器生命期，每次重建歸零 → 週紀錄以 DB 指標為主，log 指標僅參考。
+- 花費：當日未讀數（待 admin 於 AI Studio／Anthropic Console／ChatGPT Usage 記下基準值）。
+- **初步觀察**：可靠性已解決（chatgpt 期 0 failed、0 fallback）；**延遲為主要代價**（p50 30s，gemini 期的 2.6 倍），
+  為 Task 6 的核心評估項。下次紀錄：2026-11-02（W44 第二週），屆時應有家人自然流量。
 
 ### Task 5：ChatGPT Plus 接入（Sign in with ChatGPT，主力 provider）
 **說明：** 依官方 OSS／self-hosted 流程（developers.openai.com/siwc/token-sharing-open-source，2026-10-26 讀取）
@@ -287,9 +307,12 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
   $P 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select status, count(*) from turns where created_at > now() - interval '"'"'7 days'"'"' group by 1;"'
   # provider 分布
   $P 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select m->>'"'"'provider'"'"' p, m->>'"'"'model'"'"' model, count(*) from conversations, unnest(messages) m where m->>'"'"'role'"'"'='"'"'assistant'"'"' and updated_at > now() - interval '"'"'7 days'"'"' group by 1,2;"'
-  # 延遲與 fallback（brain log）
-  podman logs --since 168h omni-agent-brain-1 2>&1 | grep -o '"total_ms": [0-9.]*' | awk '{print $2}' | sort -n
-  podman logs --since 168h omni-agent-brain-1 2>&1 | grep -c "Fallback triggered"
+  # 延遲（使用者感受，含組裝靜默窗）
+  $P 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select count(*), round(percentile_cont(0.5) within group (order by extract(epoch from updated_at-created_at))::numeric,1) p50_s, round(max(extract(epoch from updated_at-created_at))::numeric,1) max_s from turns where status='"'"'delivered'"'"' and created_at > now() - interval '"'"'7 days'"'"';"'
+  # fallback／refresh／搜尋全滅（brain log，僅當前容器生命期）
+  podman logs omni-agent-brain-1 2>&1 | grep -c "Fallback triggered"
+  podman logs omni-agent-brain-1 2>&1 | grep -c "token refreshed"
+  podman logs omni-agent-brain-1 2>&1 | grep -c "engines unresponsive"
   ```
 - Gemini 故障模擬後務必還原設定並確認 preflight 恢復 OK。
 
@@ -313,3 +336,4 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 | 1.6 | 2026-10-26 | 5b 完成：ChatGPTClient 實作、router 註冊、compose 掛載憑證，容器內 smoke 通過 |
 | 1.7 | 2026-10-26 | 5c 路由切換 ChatGPT 主力並實機驗收；感知類改 reasoning effort low |
 | 1.8 | 2026-10-26 | 照片／影片複測通過；修正能力閘門跳過被誤計 fallback |
+| 1.9 | 2026-10-26 | Task 4 完成：觀察紀錄 #1（基準日）；延遲指標改用 turn 耗時 |
