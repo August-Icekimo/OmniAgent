@@ -11,3 +11,9 @@ search:
   formats:
     - html
     - json
+
+# general 分類的預設引擎（brave／duckduckgo／startpage）易被 HomeLab 出口 IP 觸發 CAPTCHA／限流；
+# bing 在 SearXNG 預設停用，但實測未被封且中文結果品質最佳 → 啟用以分散風險（2026-10-26）
+engines:
+  - name: bing
+    disabled: false

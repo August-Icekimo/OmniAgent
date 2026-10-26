@@ -85,7 +85,8 @@ services:
     restart: unless-stopped
 
   searxng:
-    image: docker.io/searxng/searxng:latest
+    # 釘版：浮動 latest 曾 4.5 個月未 re-pull，引擎解析過期（2026-10-26 升級）
+    image: docker.io/searxng/searxng:2026.10.25-54ca1d9cf
     container_name: omni-agent-searxng-1
     # 僅 compose 內網可達，不發布 host port（limiter 因此可關閉）
     volumes:
