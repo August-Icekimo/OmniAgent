@@ -1,6 +1,6 @@
 ---
 slug: local-llm-retirement
-status: ready
+status: in-sprint
 domain: llm
 size: M
 priority: P1
