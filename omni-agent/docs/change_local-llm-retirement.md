@@ -38,19 +38,21 @@ prefill cap 8192、abort 假確認、thought-marker workaround、chrysoberyl 常
 
 **In scope:**
 - 階段 1（W44）：真實 turn 驗證、Gemini 多輪 tool smoke、改 `routing_config.json`、實機驗證
-- 階段 2（觀察 2–4 週，可跨 sprint）：成功率／延遲／花費紀錄；ChatGPT Plus「Sign in with ChatGPT」接入評估
+- 階段 2（可跨 sprint）：**ChatGPT Plus「Sign in with ChatGPT」接入為主力**（admin 已有 Plus，2026-10-26 決定併入本 change）；
+  成功率／延遲／花費紀錄
 - 階段 3（觀察期結論後）：移除 local provider 與周邊、同步 spec／文件／指令
 
 **Out of scope:**
 - brain 行程內 faster-whisper 本地 STT（保留，與 MLX 無關）
 - Claude 圖片支援（另卡 `claude-vision-support`）
-- ChatGPT 實際接入實作（本變更只產出評估結論；要做則另開 change）
 - Python 3.13.18 image 升級（等官方 image 的維運項）
 
 **Assumptions:**
 - Gemini API 有餘額（2026-10-26 儲值 US$5；auto-reload 視觀察期用量決定）
 - 本變更跨越觀察期，期間 WIP=1 佔位；W44 容量 5h 只承諾階段 1 + 觀察開跑
 - 階段 3 是否執行由 Task 6 的觀察結論決定，若結論為「保留 local」則階段 3 改寫或作廢
+- ChatGPT 額度與 admin 個人 ChatGPT／Codex 使用共用同一份 Plus 額度（5h 窗＋週上限），額度用罄時串流中斷、
+  不自動轉付費 → 必須 fallback 到 Gemini／Claude
 
 ---
 
@@ -153,14 +155,61 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 - [ ] 查詢指令寫入本文件 Testing Notes，可直接複製執行
 - [ ] 第一筆紀錄（Task 3 完成當週）已填
 
-### Task 5：ChatGPT Plus 接入評估（觀察期內完成）
-**說明：** 依 grooming 素材（見 ready 卡 Context 段）補齊未確認點並產出結論：preview 是否拒
-`temperature`／system role、多人共用一訂閱的政策、OAuth loopback 在 headless 主機的可行性、
-以觀察期實際用量換算 Plus 是否划算。
+### Task 5：ChatGPT Plus 接入（Sign in with ChatGPT，主力 provider）
+**說明：** 依官方 OSS／self-hosted 流程（developers.openai.com/siwc/token-sharing-open-source，2026-10-26 讀取）
+把 admin 的 ChatGPT Plus 接成主力 provider。關鍵約束（官方 Preview limitations）：
+- `POST https://api.openai.com/v1/responses`，Bearer = OAuth access token；必須 `store: false`、`stream: true`；
+  歷史每次完整放在 `input`（不得用 `previous_response_id`）
+- **不支援** `temperature`、`max_output_tokens`、`top_p` 等欄位；**拒收** `role: system` 訊息 → system prompt 走 `instructions`
+- function tools 須以 `{"type":"namespace", ...}` 分組；工具結果以 `function_call_output`（`call_id`）回填
+- 支援圖片輸入；**不支援**音訊／影片 → 語音（faster-whisper 已轉文字）不受影響，影片仍走 Gemini
+- OAuth：PKCE S256、`client_id=dynamic_agent_client` 首次動態註冊（callback 回傳 issued `oaiapp_...` 需保存）、
+  `ext_agent_host_id`（每台 host 一個，持久化）、`resource=https://api.openai.com/v1`、
+  scope `openid profile email offline_access resource.invoke chatgpt.tokens.use.direct`、
+  redirect 固定 `http://127.0.0.1:<port>/auth/callback`
+- access token 1h、refresh token 30 天且每次 refresh 輪替 → refresh 必須序列化、原子寫回（0600）
+- 額度錯誤：`subscription_sharing_usage_limit_exceeded`(429)／`_unavailable`(503) 可在串流中途以 `response.failed` 出現
 
-**Acceptance Criteria:**
-- [ ] 結論三選一並附理由：另開 change 接入／暫不接入／待條件（例如用量達 X）再評估
-- [ ] 結論決定階段 3 對 `openai` 套件的處置（接入則保留，否則移除）
+#### 5a：技術 spike（腳本，不進 brain）
+- [x] 在 Debian 主機以腳本完成 OAuth：產生 host id＋PKCE → admin 在任一瀏覽器開授權 URL → 127.0.0.1 callback
+      無法回到主機時，admin 把瀏覽器網址列的 callback URL 貼回 → 腳本驗 `state` 後換 token
+- [x] granted scopes 含 `chatgpt.tokens.use.direct`；憑證存 `~/.config/omni-agent/siwc/credentials.json`（0600，不進 git）
+- [x] `GET /v1/models` 列出可用模型；`/v1/responses` 串流完成一次純文字（`response.completed`）
+- [x] 同一路徑驗證：`instructions` 生效、namespace function tool 觸發 `function_call` 並以 `function_call_output` 取得最終回覆、
+      圖片輸入可用、送 `temperature` 確實被拒（確認錯誤形狀）
+- [x] refresh 一次成功並輪替 refresh token
+
+**5a 結果（2026-10-26 11:21–11:29）：全數通過。** 登入工具 [scripts/siwc_login.py](../scripts/siwc_login.py)（stdlib only）。
+- OAuth：admin 於瀏覽器同意 → 貼回 callback URL → 換得 token；issued `client_id` = `oaiapp_…`，granted scopes 含
+  `chatgpt.tokens.use.direct`；憑證 `~/.config/omni-agent/siwc/credentials.json`（0600）、host id `urn:uuid:…`
+- `/v1/models`（Plus）：`gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`
+- `gpt-6.1-sol`：`instructions` 生效（指定口癖照做）；圖片 `input_image` data URL 正確辨識；
+  namespace tool → `function_call`（含 `namespace`、`call_id`）→ `function_call_output` 回填 → 正確最終回覆
+- `temperature` → HTTP 400 `{"detail":"Unsupported parameter: temperature"}`（pre-stream admission 錯誤形狀，非標準 `error` 物件）
+- **與文件不符**：`role: system` input item 實測未被拒（仍一律改走 `instructions`，避免日後收緊）
+- **實作要點**：`store:false` 時 `response.completed` 的 `response.output` 為空，output items 只在串流
+  `response.output_item.done` 事件中出現 → client 必須自行收集；usage 在 completed 事件中
+- refresh：成功且 refresh token 已輪替，新 access token 可用
+
+#### 5b：`ChatGPTClient`（brain/llm/chatgpt_client.py）
+- [ ] 實作 `ModelClient` 介面：`Message` → Responses `input` items（system → `instructions`；`Role.TOOL` → `function_call_output`；
+      assistant tool_calls → `function_call` items；image parts → `input_image`）；`ToolSpec` → namespace 包裝
+- [ ] 忽略（不送出）`temperature`／`max_tokens`；`thinking_budget` 不對應（reasoning effort 用 provider 預設）
+- [ ] 串流讀到 `response.completed` 才算成功；`response.failed`／`incomplete`／中斷 → 拋例外交給 router fallback
+- [ ] token 管理：到期前 refresh、跨協程序列化、原子寫回；refresh 終端錯誤 → WARNING 並停用 provider（不刪憑證）
+- [ ] `supports_vision()` True；`check_model()` 走 `/v1/models` 供 preflight 使用
+- [ ] 憑證以唯讀 volume 掛入 brain（compose.yml），以 env 指定路徑；檔案不存在則不註冊 provider（同 local 的註冊模式）
+- [ ] 不在 log 中輸出任何 token
+
+#### 5c：路由切換（動 routing_config 前再向 admin 確認）
+- [ ] `fallback_chain` → `["chatgpt", "gemini", "claude"]`；`image_input`／`sticker_perception` → chatgpt
+- [ ] 語音、影片維持 Gemini（router 既有 multimodal 強制路徑）
+- [ ] 實機驗收：文字＋工具、照片、貼圖、語音、影片各一；額度錯誤模擬時文字落 Gemini
+
+**Acceptance Criteria（整體）：**
+- [ ] Telegram／LINE 一般 turn 由 chatgpt 回覆，延遲不劣於 Gemini 主力時期
+- [ ] ChatGPT 額度用罄／token 失效時 Cindy 仍會回覆（Gemini／Claude 接手）
+- [ ] 重啟 brain 後無需重新登入（refresh 正常輪替）
 
 ### Task 6：觀察期結論與退役決定
 **說明：** 觀察 2–4 週後，依 Task 4 數據決定是否進入階段 3。
@@ -169,6 +218,7 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 - [ ] 期間 local 未被需要（無 `/provider local` 使用需求、無「雲端做不到而 local 做得到」的案例）
 - [ ] turn 成功率與延遲不劣於預期；月花費在 admin 可接受範圍
 - [ ] 決定「退役」／「延長觀察」／「保留 local 某角色」，寫入本文件；Gemini 是否開 auto-reload 一併決定
+- [ ] ChatGPT 主力期間的額度消耗是否影響 admin 個人使用，決定是否需要 per-app 週上限（ChatGPT Settings → Usage）
 
 ### Task 7：移除 local provider 程式碼（階段 3，視 Task 6 結論）
 **說明：** 移除 local 及其周邊，含 Gemma 專屬 workaround 與升級路徑（連帶消除 `_perceive_image` bug）。
@@ -180,7 +230,7 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 - [ ] `routing_config.json` 移除 `providers.local`；`.env.example`、[init-omni-agent.sh](../scripts/init-omni-agent.sh) 移除 `MLX_*`；
       部署 `.env` 移除 `MLX_*`（admin 執行）
 - [ ] 刪除 `test_vision_local.py`；`test_router.py`／`test_model_preflight.py`／`test_terminal.py`／`test_web_search.py` 中 local 參照更新，且可執行通過
-- [ ] `openai` 套件依 Task 5 結論保留或自 [requirements.txt](../brain/requirements.txt) 移除
+- [ ] `openai` 套件保留（ChatGPTClient 使用）；更新 requirements.txt 註解（不再是 local 專用）
 - [ ] `grep -ri "mlx\|gemma\|LocalClient"`（排除 archive／歷史文件）無殘留
 
 ### Task 8：同步 spec、文件與指令（階段 3）
@@ -228,3 +278,5 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 | 1.1 | 2026-10-26 | Task 1 完成：真實 Telegram turn 證實 local 離線 → 300s 逾時、Cindy 不回話、fallback 答案被丟棄 |
 | 1.2 | 2026-10-26 | Task 2 完成（Gemini 多輪 tool 迴圈可用）；Task 3 設定已套用，待實機驗收 |
 | 1.3 | 2026-10-26 | Task 3 實機驗收全數通過（文字／照片／貼圖／語音＋故障模擬），階段 1 完成 |
+| 1.4 | 2026-10-26 | Task 5 由「ChatGPT 評估」改為「ChatGPT Plus 接入為主力」（5a spike／5b client／5c 路由），依官方 SIWC 文件補技術約束 |
+| 1.5 | 2026-10-26 | 5a spike 完成：OAuth／模型清單／instructions／namespace tool 迴圈／圖片／refresh 皆通過，記錄串流收集 output items 等實作要點 |
