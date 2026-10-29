@@ -250,6 +250,9 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
   file_analyzer 的 `_vision_chat`／`_perceive_image` 改為傳遞規則的 `thinking_budget`。
 - 待辦（Task 7 一併處理）：file_analyzer 多處寫死 `provider="gemini"`（OCR 足夠性判斷、PDF 摘要、語音備援、升級保底），
   違反 CLAUDE.md「不得寫死」；退役清理時改走預設 provider 或規則。
+  **2026-10-29 先行處理**（與 local 去留無關）：PDF 摘要、OCR 足夠性判斷（帶 `thinking_budget=0` → effort low）、語音備援改走預設 provider
+  （語音由 router 能力閘門跳過 chatgpt 落 gemini，同影片）；容器內 smoke 驗證 OCR 判斷走 chatgpt、語音走 gemini、無 fallback。
+  剩升級保底兩處（`_vision_chat`／`_perceive_image`）屬 local 專屬路徑，留 Task 7 整段移除。
 - admin 確認：個人寫程式主力非 Codex，Plus 額度可全數投入 Cindy（Task 6 額度顧慮解除）。
 - 複測（effort low 套用後，11:50–11:52）：照片（迷因圖）turn `0756171f` **33s**（原 69s；OCR chatgpt 4.5s → 足夠性 gemini 4s →
   Stage 2 chatgpt 10s → reporter 8s）；影片 turn `6e8fd1bd` 30s，能力閘門跳過 chatgpt → gemini 17s 分析 → reporter chatgpt，內容正確。
@@ -259,7 +262,7 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 **Acceptance Criteria（整體）：**
 - [ ] Telegram／LINE 一般 turn 由 chatgpt 回覆，延遲不劣於 Gemini 主力時期（**未達**：文字 20–30s、照片 33s，Gemini 時期 11–12s；推理模型的代價，觀察期評估是否可接受）
 - [x] ChatGPT 額度用罄／token 失效時 Cindy 仍會回覆（Gemini／Claude 接手）（monkeypatch 模擬）
-- [ ] 重啟 brain 後無需重新登入（refresh 正常輪替）
+- [x] 重啟 brain 後無需重新登入（refresh 正常輪替）（2026-10-29：連續運行 3 天 refresh 6 次；`podman compose restart brain` 後以既有憑證 refresh 成功、refresh token 輪替、preflight chatgpt OK）
 
 ### Task 6：觀察期結論與退役決定
 **說明：** 觀察 2–4 週後，依 Task 4 數據決定是否進入階段 3。
@@ -337,3 +340,4 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 | 1.7 | 2026-10-26 | 5c 路由切換 ChatGPT 主力並實機驗收；感知類改 reasoning effort low |
 | 1.8 | 2026-10-26 | 照片／影片複測通過；修正能力閘門跳過被誤計 fallback |
 | 1.9 | 2026-10-26 | Task 4 完成：觀察紀錄 #1（基準日）；延遲指標改用 turn 耗時 |
+| 1.10 | 2026-10-29 | Task 5 重啟免登入 AC 通過；file_analyzer 寫死 gemini 三處先行改走預設 provider |
