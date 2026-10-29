@@ -1,11 +1,22 @@
 ---
 slug: provider-override-merged-turn
-status: idea
+status: resolved
 domain: brain
 size: XS
 priority: P2
 created: 2026-10-26
+resolved: 2026-10-29
+resolved_by: brain/main.py `_extract_provider_override`（W44 Stretch，XS 不另開 change doc）
 ---
+
+> **已解決（2026-10-29）。** 覆蓋解析從 `plan_node` 移到 `_execute_conversation` 入口（/chat、/turn 共用），
+> 在記憶召回與存歷史之前逐行掃描合併文字（main.py 以 `\n` 串接各則訊息），取最後一個有效 `/provider`
+> 指令並移除該行指令前綴；graph 改讀 state 的 `selected_provider`。Open questions 定案：多個指令取最後一個；
+> 依合併文字逐行掃描（邊界由換行保留）。
+>
+> **實機驗收（Telegram）**：單則 `/provider gemini …`（turn `7242881d`、`187e0543`）→ gemini；
+> 合併 turn `1a9005d8`（「再一次」＋`/provider gemini 今天新店天氣如何？`）→ gemini，歷史存為「再一次⏎今天新店天氣如何？」。
+> 附帶修正：舊版單則覆蓋也會把 `/provider …` 原文存入歷史，現已不會。
 
 # `/provider` 覆蓋在多訊息合併的 turn 中失效
 
