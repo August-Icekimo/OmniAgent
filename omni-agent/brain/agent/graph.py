@@ -219,18 +219,11 @@ async def planner_node(state: AgentState):
         router = state["model_router"]
         messages = state["messages"]
         last_msg_text = messages[-1].content if messages else ""
-        selected_provider = None
-        routing_reason = ""
+        # 手動 provider 覆蓋已由 main._extract_provider_override 解析並移除指令文字
+        selected_provider = state.get("selected_provider")
+        routing_reason = state.get("routing_reason") or ""
 
         timer.start_span()
-        # 手動 provider 覆蓋：/provider claude 你好
-        if isinstance(last_msg_text, str) and last_msg_text.startswith("/provider "):
-            parts = last_msg_text.split(" ", 2)
-            if len(parts) >= 2 and parts[1].lower() in router._clients:
-                selected_provider = parts[1].lower()
-                routing_reason = f"override:{selected_provider}"
-                messages[-1].content = parts[2] if len(parts) > 2 else ""
-
         if not selected_provider:
             decision = router.select_provider({
                 "text": last_msg_text if isinstance(last_msg_text, str) else "",

@@ -51,6 +51,26 @@ def _strip_viewer_links(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _extract_provider_override(text: str, providers) -> tuple[str | None, str]:
+    """手動 provider 覆蓋：/provider claude 你好。
+
+    /turn 會把多則訊息以換行合併，指令可能不在開頭 → 逐行掃描，取最後一個有效指令；
+    有效指令行只留其後的內容，讓指令不進模型輸入、記憶召回與對話歷史。
+    """
+    override = None
+    lines = []
+    for line in text.split("\n"):
+        if line.startswith("/provider "):
+            parts = line.split(" ", 2)
+            if parts[1].lower() in providers:
+                override = parts[1].lower()
+                if len(parts) > 2 and parts[2].strip():
+                    lines.append(parts[2])
+                continue
+        lines.append(line)
+    return override, "\n".join(lines).strip()
+
+
 def _media_placeholder(attachment: "AttachmentModel") -> str:
     """Generate a content-addressed placeholder for an attachment.
     Uses SHA-256 of file bytes (first 512 KB) so the same media maps to
@@ -527,6 +547,8 @@ async def _execute_conversation(
         logger.error(f"SoulLoader failed: {e}")
         system_prompt = "I am Cindy, a family AI assistant."
 
+    provider_override, user_content = _extract_provider_override(user_content, router._clients)
+
     # 長期記憶召回
     if pool:
         memories = await long_term.recall(user_id, user_content)
@@ -571,8 +593,8 @@ async def _execute_conversation(
         "messages": graph_messages,
         "system_prompt": system_prompt,
         "model_router": router,
-        "selected_provider": None,
-        "routing_reason": None,
+        "selected_provider": provider_override,
+        "routing_reason": f"override:{provider_override}" if provider_override else None,
         "attachment": attachment,
         "confirmation_received": confirmation_received,
         "resume_tools": resume_tools,
