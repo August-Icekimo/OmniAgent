@@ -312,6 +312,8 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
   $P 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select m->>'"'"'provider'"'"' p, m->>'"'"'model'"'"' model, count(*) from conversations, unnest(messages) m where m->>'"'"'role'"'"'='"'"'assistant'"'"' and updated_at > now() - interval '"'"'7 days'"'"' group by 1,2;"'
   # 延遲（使用者感受，含組裝靜默窗）
   $P 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select count(*), round(percentile_cont(0.5) within group (order by extract(epoch from updated_at-created_at))::numeric,1) p50_s, round(max(extract(epoch from updated_at-created_at))::numeric,1) max_s from turns where status='"'"'delivered'"'"' and created_at > now() - interval '"'"'7 days'"'"';"'
+  # 用量（llm_usage，2026-10-29 起；每次 provider 嘗試一筆，含失敗與 fallback）
+  $P 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select provider, caller, count(*) filter (where ok) ok, count(*) filter (where not ok) failed, count(*) filter (where fallback) fb, sum(input_tokens) in_tok, sum(output_tokens) out_tok, sum(reasoning_tokens) reason_tok, percentile_disc(0.5) within group (order by latency_ms) p50_ms from llm_usage where created_at > now() - interval '"'"'7 days'"'"' group by 1,2 order by 1,2;"'
   # fallback／refresh／搜尋全滅（brain log，僅當前容器生命期）
   podman logs omni-agent-brain-1 2>&1 | grep -c "Fallback triggered"
   podman logs omni-agent-brain-1 2>&1 | grep -c "token refreshed"
@@ -341,3 +343,4 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 | 1.8 | 2026-10-26 | 照片／影片複測通過；修正能力閘門跳過被誤計 fallback |
 | 1.9 | 2026-10-26 | Task 4 完成：觀察紀錄 #1（基準日）；延遲指標改用 turn 耗時 |
 | 1.10 | 2026-10-29 | Task 5 重啟免登入 AC 通過；file_analyzer 寫死 gemini 三處先行改走預設 provider |
+| 1.11 | 2026-10-29 | Testing Notes 新增 llm_usage 用量查詢（idea llm-usage-accounting） |

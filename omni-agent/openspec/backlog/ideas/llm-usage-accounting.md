@@ -1,11 +1,23 @@
 ---
 slug: llm-usage-accounting
-status: idea
+status: resolved
 domain: llm
 size: XS
 priority: P2
 created: 2026-10-29
+resolved: 2026-10-29
+resolved_by: db/migrations/011_llm_usage.sql + brain/llm/router.py `_record_usage`（W44 Stretch，XS 不另開 change doc）
 ---
+
+> **已解決（2026-10-29）。** Open questions 由 admin 定案：開新表 `llm_usage`、實測各家 reasoning 欄位、一併記延遲。
+> 實作：每次 `Router.chat` 的 provider 嘗試（含失敗、含 fallback）fire-and-forget 寫一筆；
+> 不放 user_id／turn_id（router 拿不到，觀察期以時間對 turns 即可）。
+>
+> **實測各家 reasoning 欄位**：ChatGPT `output_tokens_details.reasoning_tokens`、Claude `output_tokens_details.thinking_tokens`
+> 皆**已含**在 output_tokens；Gemini `thoughts_token_count` **不含**在 `candidates_token_count` →
+> 原本 Gemini usage 少算思考 token（實測「17*23」思考 211、可見輸出 3），已改為 output = candidates + thoughts。
+> 容器內 smoke：三 provider 成功各一筆、chatgpt 模擬失敗 → 失敗一筆（`RuntimeError`）＋ gemini `fallback=true` 一筆；測試資料已清除。
+> 觀察查詢已加入 docs/change_local-llm-retirement.md Testing Notes。
 
 # 記錄每次 LLM 呼叫的 token 用量（provider／model／caller）
 
