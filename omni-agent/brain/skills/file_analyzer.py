@@ -87,7 +87,7 @@ class FileAnalyzer:
             
             response = await self.router.chat(
                 [Message(role=Role.USER, content=prompt)],
-                provider="gemini" # 預設用 Gemini Flash 摘要文字
+                caller="pdf_summary",
             )
             return response.content
         except Exception as e:
@@ -126,7 +126,7 @@ class FileAnalyzer:
         """本地 gemma 視覺優先（gemini 升級保底）的兩階段視覺流（Phase 4D 框架）。
 
         OCR 與視覺描述走 _vision_chat（local 試點 + 升級保底）；中間的「OCR 是否足夠」
-        評估為純文字 YES/NO 閘門，續用 gemini（圖片 bytes 不外送，僅送已萃取文字）。
+        評估為純文字 YES/NO 閘門，走預設 provider（僅送已萃取文字）。
         """
         try:
             with open(path, "rb") as f:
@@ -143,9 +143,13 @@ class FileAnalyzer:
 
             # 判斷是否需要 Stage 2
             if ocr_text != "[EMPTY]" and ocr_text != "":
-                # 簡單評估 OCR 是否足以回答指令（純文字閘門，續用 gemini）
+                # 簡單評估 OCR 是否足以回答指令（純文字 YES/NO 閘門，走預設 provider 快路徑）
                 eval_prompt = f"用戶指令：{instruction or '無'}\nOCR 萃取文字：\n{ocr_text}\n\n請問僅憑這些文字是否足以精確回答用戶指令？請回傳 YES 或 NO。"
-                eval_response = await self.router.chat([Message(role=Role.USER, content=eval_prompt)], provider="gemini")
+                eval_response = await self.router.chat(
+                    [Message(role=Role.USER, content=eval_prompt)],
+                    thinking_budget=0,
+                    caller="image_ocr_eval",
+                )
                 if "YES" in eval_response.content.upper():
                     logger.info("Stage 1 OCR sufficient, skipping Stage 2.")
                     return f"[OCR 萃取結果]\n{ocr_text}"
@@ -178,7 +182,7 @@ class FileAnalyzer:
                 audio_bytes = f.read()
                 audio_data = base64.b64encode(audio_bytes).decode("utf-8")
 
-            # 請求 Gemini 進行轉錄與回應
+            # 轉錄與回應；audio payload 由 router 能力閘門導向可處理音訊的 provider
             # Delimiters are chosen to be unlikely to appear verbatim in speech.
             prompt = (
                 "這是一段語音訊息。\n"
@@ -190,7 +194,7 @@ class FileAnalyzer:
                 {"type": "text", "text": prompt}
             ]
 
-            response = await self.router.chat([Message(role=Role.USER, content=content)], provider="gemini")
+            response = await self.router.chat([Message(role=Role.USER, content=content)], caller="voice_analysis")
             full_text = response.content
 
             # 解析轉錄內容與回應
