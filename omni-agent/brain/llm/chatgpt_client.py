@@ -283,7 +283,10 @@ class ChatGPTClient(ModelClient):
         usage = {}
         u = getattr(final.response, "usage", None)
         if u:
-            usage = {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}
+            usage = {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}  # 已含 reasoning
+            reasoning = getattr(getattr(u, "output_tokens_details", None), "reasoning_tokens", None)
+            if reasoning is not None:
+                usage["reasoning_tokens"] = reasoning
             cached = getattr(getattr(u, "input_tokens_details", None), "cached_tokens", 0) or 0
             if cached:
                 usage["cache_read_tokens"] = cached

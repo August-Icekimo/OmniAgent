@@ -1,7 +1,9 @@
+import asyncio
 import logging
 import os
 import json
 import re
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -297,6 +299,7 @@ class ModelRouter:
                 fallback_triggered = True
 
             logger.info(f"Router: attempting {target} with model {target_model}")
+            started = time.monotonic()
             try:
                 # 執行對話
                 try:
@@ -321,14 +324,24 @@ class ModelRouter:
                         tool_choice=tool_choice,
                     )
                 
+                self._record_usage(
+                    provider=target, model=response.model or target_model, caller=caller,
+                    ok=True, fallback=fallback_triggered, started=started, usage=response.usage,
+                )
+
                 # 如果是退路觸發的，加上思考表情符號
                 if fallback_triggered:
                     response.content = "🤔 " + response.content
-                    
+
                 return response
-                
+
             except Exception as e:
                 logger.error(f"Provider {target} failed: {e}")
+                self._record_usage(
+                    provider=target, model=target_model or client.model_name(), caller=caller,
+                    ok=False, fallback=fallback_triggered, started=started,
+                    error_type=type(e).__name__,
+                )
                 last_error = e
                 continue
         
@@ -339,6 +352,32 @@ class ModelRouter:
              return LLMResponse(content="", model="none", provider="none", usage={})
 
         raise RuntimeError(f"All providers in fallback chain failed. Last error: {last_error}")
+
+    def _record_usage(self, *, provider: str, model: str | None, caller: str, ok: bool,
+                      fallback: bool, started: float, usage: dict | None = None,
+                      error_type: str | None = None) -> None:
+        """每次 provider 嘗試寫一筆 llm_usage（best-effort、fire-and-forget，不影響回覆）。"""
+        if not self._db_pool:
+            return
+        usage = usage or {}
+        latency_ms = int((time.monotonic() - started) * 1000)
+
+        async def _insert():
+            try:
+                await self._db_pool.execute(
+                    """
+                    INSERT INTO llm_usage (provider, model, caller, ok, error_type, fallback, latency_ms,
+                                           input_tokens, output_tokens, reasoning_tokens, cache_read_tokens)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    """,
+                    provider, model, caller, ok, error_type, fallback, latency_ms,
+                    usage.get("input_tokens"), usage.get("output_tokens"),
+                    usage.get("reasoning_tokens"), usage.get("cache_read_tokens"),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to record llm_usage: {e}")
+
+        asyncio.create_task(_insert())
 
 def create_default_router() -> ModelRouter:
     """建立路由並偵測可用 Provider。"""

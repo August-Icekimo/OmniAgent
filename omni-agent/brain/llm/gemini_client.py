@@ -164,9 +164,12 @@ class GeminiClient(ModelClient):
 
         usage = {}
         if response.usage_metadata:
+            # thoughts_token_count 不含在 candidates_token_count 內，但同樣以輸出計費 → 合計為 output
+            thoughts = response.usage_metadata.thoughts_token_count or 0
             usage = {
                 "input_tokens": response.usage_metadata.prompt_token_count,
-                "output_tokens": response.usage_metadata.candidates_token_count,
+                "output_tokens": (response.usage_metadata.candidates_token_count or 0) + thoughts,
+                "reasoning_tokens": thoughts,
             }
             if hasattr(response.usage_metadata, "cached_content_token_count"):
                 usage["cache_read_tokens"] = response.usage_metadata.cached_content_token_count

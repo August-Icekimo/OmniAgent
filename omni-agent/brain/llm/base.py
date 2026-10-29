@@ -64,7 +64,8 @@ class LLMResponse:
     model: str
     provider: str
     usage: dict = field(default_factory=dict)
-    # usage 範例: {"input_tokens": 100, "output_tokens": 50, "cache_read_tokens": 80}
+    # usage 範例: {"input_tokens": 100, "output_tokens": 50, "reasoning_tokens": 20, "cache_read_tokens": 80}
+    # output_tokens 為計費輸出（含 reasoning）；reasoning_tokens 為其中的思考部分
     cached: bool = False
     # "length"=被 max_tokens 硬截；"tool_calls"=模型要求呼叫工具（迴圈據此續跑）
     finish_reason: str = ""

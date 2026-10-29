@@ -100,8 +100,11 @@ class ClaudeClient(ModelClient):
         if response.usage:
             usage = {
                 "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
+                "output_tokens": response.usage.output_tokens,  # 已含 thinking
             }
+            details = getattr(response.usage, "output_tokens_details", None)
+            if details and getattr(details, "thinking_tokens", None) is not None:
+                usage["reasoning_tokens"] = details.thinking_tokens
             # cache 相關 usage 欄位（如果有的話）
             if hasattr(response.usage, "cache_creation_input_tokens"):
                 usage["cache_creation_tokens"] = response.usage.cache_creation_input_tokens

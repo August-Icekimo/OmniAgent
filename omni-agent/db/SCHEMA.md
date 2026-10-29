@@ -176,3 +176,23 @@ LLM 超過門檻未回覆時，gateway 送出「取得答案」按鈕並在此�
 | `action_taken` | text | 系統採取的應對動作 |
 | `mood` | text | 供靈魂模組注入用的情緒代碼 |
 | `created_at` | timestamptz | 紀錄時間 |
+
+### `llm_usage` — LLM 呼叫用量帳（011 新增）
+每次 `Router.chat` 的 provider 嘗試寫一筆（best-effort）；SIWC 拿不到 ChatGPT Plus 剩餘額度，以此估算各 provider 用量。
+| 欄位 | 類型 | 說明 |
+| :--- | :--- | :--- |
+| `id` | bigserial | 主鍵 |
+| `created_at` | timestamptz | 嘗試完成時間 |
+| `provider` | text | chatgpt／gemini／claude／local |
+| `model` | text | 實際模型 id |
+| `caller` | text | 呼叫端標記（agent、image_ocr、pdf_summary…；未帶為 `unknown`） |
+| `ok` | boolean | 是否成功；失敗嘗試 token 欄位為 NULL |
+| `error_type` | text | 失敗時的例外類別名 |
+| `fallback` | boolean | 是否為前一 provider 實際失敗後的嘗試 |
+| `latency_ms` | int | 單次嘗試耗時 |
+| `input_tokens` | int | 輸入 token |
+| `output_tokens` | int | 計費輸出 token（含 reasoning／thinking；Gemini 為 candidates + thoughts） |
+| `reasoning_tokens` | int | 其中的思考 token |
+| `cache_read_tokens` | int | 命中快取的輸入 token |
+
+**索引**: `llm_usage_created_at (created_at)`。
