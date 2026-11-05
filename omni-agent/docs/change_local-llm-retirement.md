@@ -175,6 +175,28 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 - **初步觀察**：可靠性已解決（chatgpt 期 0 failed、0 fallback）；**延遲為主要代價**（p50 30s，gemini 期的 2.6 倍），
   為 Task 6 的核心評估項。下次紀錄：2026-11-02（W44 第二週），屆時應有家人自然流量。
 
+**#2 — 2026-11-05（原訂 11-02，遲 3 天；W44 retro 時補記；範圍 10-27～11-05）**
+
+| 日期 | delivered | failed | cancelled | 延遲 p50 | 延遲 max |
+|---|---|---|---|---|---|
+| 10-27 | 2 | 0 | 0 | 27.5s | 40.0s |
+| 10-29 | 9 | 0 | 0 | 14.0s | 31.0s |
+| 10-30 | 22 | 0 | 3 | 32.5s | 82.0s |
+| 10-31 | 9 | 0 | 0 | 37.0s | 92.0s |
+| 11-03 | 2 | 0 | 0 | 51.5s | 70.0s |
+| 11-04 | 2 | 0 | 0 | 56.5s | 91.0s |
+| 11-05 | 2 | 0 | 0 | 65.0s | 91.0s |
+
+- **流量全來自 admin 一人**（單一 user_id）；admin 確認家人目前沒在用 Cindy（家人帳號尚未建立推廣）→ 觀察期改以 admin 使用為評估基準，
+  不再等待家人自然流量。
+- `llm_usage`（10-30 起）：chatgpt 128 次嘗試、**0 failed、0 fallback**（agent_node 74、unknown 37、
+  image_ocr 5、image_vision 5、reporter_node_perception 4、image_ocr_eval 3）；gemini／claude 0 次。
+- brain log（容器 10-30 起）：`Fallback triggered` 0；`engines unresponsive` 8（duckduckgo 常態 CAPTCHA，其餘引擎仍有結果）。
+- 延遲：11-03 起 p50 上升至 50–65s，但每日僅 2 筆且多帶附件（`attachment_routing`），單日 LLM 總耗時 95–127s，
+  樣本過小不足判定退化；下次紀錄拆分「附件 turn／純文字 turn」再看。
+- 花費：仍未讀數（AI Studio／Anthropic Console／ChatGPT Usage）。
+- 下次紀錄：2026-11-12。
+
 ### Task 5：ChatGPT Plus 接入（Sign in with ChatGPT，主力 provider）
 **說明：** 依官方 OSS／self-hosted 流程（developers.openai.com/siwc/token-sharing-open-source，2026-10-26 讀取）
 把 admin 的 ChatGPT Plus 接成主力 provider。關鍵約束（官方 Preview limitations）：
@@ -344,3 +366,4 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 | 1.9 | 2026-10-26 | Task 4 完成：觀察紀錄 #1（基準日）；延遲指標改用 turn 耗時 |
 | 1.10 | 2026-10-29 | Task 5 重啟免登入 AC 通過；file_analyzer 寫死 gemini 三處先行改走預設 provider |
 | 1.11 | 2026-10-29 | Testing Notes 新增 llm_usage 用量查詢（idea llm-usage-accounting） |
+| 1.12 | 2026-11-05 | 觀察紀錄 #2（W44 retro 補記）；評估基準改為 admin 使用（家人目前未使用） |
