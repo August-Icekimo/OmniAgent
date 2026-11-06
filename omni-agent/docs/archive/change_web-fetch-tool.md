@@ -76,7 +76,7 @@
 - [x] 允許：`https://www.cwa.gov.tw/...`、`https://en.wikipedia.org/...`
 - [x] DNS 解析失敗 → 拒絕並回明確原因
 
-**Task 2 結果（2026-11-06）：** [url_safety.py](../brain/skills/url_safety.py)。brain 容器內 18 個應拒 URL 全擋
+**Task 2 結果（2026-11-06）：** [url_safety.py](../../brain/skills/url_safety.py)。brain 容器內 18 個應拒 URL 全擋
 （含 `localtest.me`／`127.0.0.1.nip.io` 這類公網域名解析到 loopback、`0x7f000001`／`2130706433` 數字 IP、`127.1`、`0177.0.0.1`），
 3 個公開 URL 全放行。額外擋 `.local`／`.internal`／`.lan`／`.home` 網域。
 
@@ -100,7 +100,7 @@
 - [x] 404／逾時／連線失敗 → 該頁 `error` 有可讀原因，其餘 URL 不受影響
 - [x] 不在 log 中輸出完整頁面內容
 
-**Task 3 結果（2026-11-06）：** [web_fetch.py](../brain/skills/web_fetch.py)。實作過程修正三處提案假設：
+**Task 3 結果（2026-11-06）：** [web_fetch.py](../../brain/skills/web_fetch.py)。實作過程修正三處提案假設：
 1. **JS 殼頁偵測**：CWA 靜態擷取 683 字（> 200 字門檻，全是空表頭＋「您的瀏覽器不支援JavaScript功能」）→ 未觸發渲染。
    加判斷：正文 < 3000 字且含「請開啟 JavaScript」類提示 → 也渲染。
 2. **CSS 隱藏內容**：渲染後 CWA 溫度變 `2475`（`tem-C` 24 與隱藏的 `tem-F` 75 被 trafilatura 黏在一起）→
@@ -162,7 +162,7 @@ repo 根目錄新增 `test_web_fetch.py`（風格同 `test_web_search.py`，進 
 - [x] spec 新 requirement 與實作一致（預算數字、URL 上限、SSRF 範圍）
 
 **Task 5 結果（2026-11-06）：** skills spec 新增「Web Page Fetch」requirement（4 個 scenario）；
-[test_web_fetch.py](../../test_web_fetch.py) 8 組測項於 brain 容器全數通過（`ALL PASSED`）。
+[test_web_fetch.py](../../../test_web_fetch.py) 8 組測項於 brain 容器全數通過（`ALL PASSED`）。
 
 ---
 
@@ -188,3 +188,4 @@ repo 根目錄新增 `test_web_fetch.py`（風格同 `test_web_search.py`，進 
 |---|---|---|
 | 1.0 | 2026-11-06 | Initial proposal（源自 ready 卡 web-fetch-tool，W45 Committed） |
 | 1.1 | 2026-11-06 | Task 1–5 完成：依賴＋headless shell、SSRF 模組、fetch_url（JS 殼頁偵測、隱藏元素移除、route 內跟隨 redirect 三處修正）、工具接線、spec＋測試；Telegram 實機驗收通過 |
+| 1.2 | 2026-11-06 | Archived — implementation complete |

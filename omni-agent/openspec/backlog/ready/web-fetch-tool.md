@@ -1,11 +1,12 @@
 ---
 slug: web-fetch-tool
-status: in-progress
+status: done
 domain: skills
 size: M
 priority: P1
 created: 2026-11-06
 groomed: 2026-11-06
+done: 2026-11-06
 ---
 
 # 讓 Cindy 能打開網頁讀正文（fetch_url 工具）
