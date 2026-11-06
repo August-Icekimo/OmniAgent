@@ -51,6 +51,27 @@ The system must be able to retrieve real-time information from the web for time-
 - **AND** return a truncated, ranked list of `{title, url, description, position}` results
 - **AND** never raise — failures return a serializable `{"success": false, "error": ...}`.
 
+### Requirement: Web Page Fetch (Read Page Content)
+The system must be able to read the main content of public web pages (including JavaScript-rendered pages and PDFs) so that search results can be verified beyond their snippets.
+
+#### Scenario: Fetch Static Page
+- **WHEN** the `fetch_url` skill is called with up to 3 `http`/`https` URLs
+- **THEN** each page must be fetched in the brain process and its main content extracted with `trafilatura`
+- **AND** content over 8000 characters must be truncated to head + tail with an explicit omission marker
+- **AND** the result must be `{"success": true, "data": {"pages": [{url, final_url, title, content, truncated, rendered, error}]}}`; per-page failures go in `error`, the skill never raises.
+
+#### Scenario: Render JavaScript Page
+- **WHEN** the static extraction yields fewer than 200 characters, or fewer than 3000 characters containing an "enable JavaScript" hint, or the server answers 403/429/503
+- **THEN** the page must be rendered with headless Chromium (Playwright), CSS-hidden elements removed, and content re-extracted.
+
+#### Scenario: Block Internal Targets (SSRF)
+- **WHEN** a URL, any redirect hop, or any request/WebSocket made by the rendered page targets a non-public address (private, loopback, link-local, CGNAT `100.64.0.0/10`, multicast, reserved), a dotless or internal-suffix hostname, embeds credentials, or carries a secret-like token
+- **THEN** the request must be refused and logged as a WARNING, and the page error must state that it was refused.
+
+#### Scenario: No Confirmation Needed
+- **WHEN** the model calls `fetch_url`
+- **THEN** it must execute without a confirmation round-trip (read-only, no side effects), and its content must be presented to the model as untrusted reference material.
+
 ### Requirement: Terminal Command Execution (Sandboxed)
 The system must be able to execute shell commands to inspect HomeLab state, with strict isolation and authorization controls.
 
