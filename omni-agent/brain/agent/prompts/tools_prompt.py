@@ -24,6 +24,12 @@ def build_tools_prompt(skills_url: str | None = None) -> str:
   - params: {"query": "搜尋關鍵字", "limit": 5}
   - 类型: [Read]
   - 涉及「現在 / 今天 / 最新 / 最近」或你訓練資料之後的事實性問題，優先呼叫 web_search，不要憑記憶猜測。一般閒聊或意見交流不需要搜尋。
+  - 搜尋結果只有標題與摘要；摘要不足以回答時，再用 fetch_url 讀 1–2 個最相關結果的正文。
+
+- fetch_url: 打開網頁（或 PDF）讀取正文，會自動處理需要 JavaScript 的頁面。
+  - params: {"urls": ["https://..."]}（最多 3 個）
+  - 类型: [Read]
+  - 只能讀公開網路；讀取失敗代表「頁面打不開」，不等於「查無資料」。
 
 - terminal: 在 HomeLab 沙箱環境執行 shell 命令（查看系統狀態、磁碟、程序、檔案等）。
   - params: {"command": "shell 命令字串", "timeout": 30, "background": false}

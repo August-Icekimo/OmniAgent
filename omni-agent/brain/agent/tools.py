@@ -1,7 +1,7 @@
 """工具註冊表：skill → ToolSpec（provider-native function calling）+ 執行分派。
 
 ToolSpec 描述提供給模型（見 llm/base.py）；執行分派沿用既有 skill 實作
-（terminal→sandbox、web_search→SearXNG、其餘→SKILLS_URL）。安全把關（terminal
+（terminal→sandbox、web_search→SearXNG、fetch_url→brain 內抓取、其餘→SKILLS_URL）。安全把關（terminal
 admin 閘門、危險命令封鎖）在 graph 的工具迴圈執行前進行，不在此。
 """
 
@@ -38,6 +38,8 @@ TOOL_SPECS: list[ToolSpec] = [
         description=(
             "搜尋網路上的即時資訊（新聞、天氣、店家、時事，或你不確定的最新知識）。"
             "涉及「現在/今天/最新/最近」或訓練資料之後的事實優先用；一般閒聊或意見交流不用。"
+            "結果只有標題與摘要；摘要不足以回答（例如要具體數字、版本、日期、條文）時，"
+            "再用 fetch_url 讀 1–2 個最相關結果的正文。"
         ),
         parameters={
             "type": "object",
@@ -46,6 +48,26 @@ TOOL_SPECS: list[ToolSpec] = [
                 "limit": {"type": "integer", "description": "結果數，預設 5"},
             },
             "required": ["query"],
+        },
+    ),
+    ToolSpec(
+        name="fetch_url",
+        description=(
+            "打開網頁（或 PDF）讀取正文，會自動處理需要 JavaScript 的頁面。"
+            "用於 web_search 摘要不夠、或使用者直接給了網址要你看內容時；一次最多 3 個網址，長頁面只回頭尾。"
+            "只能讀公開網路，內網／區網位址會被拒絕。"
+            "讀取失敗代表「頁面打不開」，不等於「查無資料」，請如實告知或換一個來源。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "要讀取的網址（http/https），最多 3 個",
+                },
+            },
+            "required": ["urls"],
         },
     ),
     ToolSpec(
@@ -102,7 +124,8 @@ def tool_needs_confirmation(name: str, args: dict) -> bool:
     （wake_on_lan、cockpit restart_service…）仍需確認。
     """
     # delegate_to_specialist：摘要類唯讀工作，無真實世界副作用 → 不需確認。
-    if name in ("web_search", "terminal", "delegate_to_specialist"):
+    # fetch_url：唯讀 GET（SSRF 已擋內網），無副作用 → 不需確認。
+    if name in ("web_search", "fetch_url", "terminal", "delegate_to_specialist"):
         return False
     if name == "cockpit":
         return (args or {}).get("action") == "restart_service"
@@ -166,6 +189,10 @@ async def execute_tool(name: str, args: dict, model_router) -> dict:
         if not query:
             return {"success": False, "error": "缺少搜尋關鍵字 query"}
         return await provider.search(query, limit=args.get("limit", 5))
+
+    if name == "fetch_url":
+        from skills.web_fetch import fetch_urls
+        return await fetch_urls(args.get("urls") or args.get("url") or [])
 
     # 其餘技能（wake_on_lan / cockpit …）走 Go Skills Server
     skills_url = os.getenv("SKILLS_URL")
