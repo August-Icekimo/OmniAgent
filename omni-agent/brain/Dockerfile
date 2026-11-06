@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# fetch_url 的 JS 渲染：Playwright 只裝 headless shell（省去完整 Chromium）＋系統依賴（web-fetch-tool）
+RUN playwright install --with-deps --only-shell chromium && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 
 EXPOSE 8000
