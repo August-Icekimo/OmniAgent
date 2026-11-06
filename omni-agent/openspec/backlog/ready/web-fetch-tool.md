@@ -1,6 +1,6 @@
 ---
 slug: web-fetch-tool
-status: in-sprint
+status: in-progress
 domain: skills
 size: M
 priority: P1
