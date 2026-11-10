@@ -20,6 +20,17 @@ The brain must use a stateful graph with **provider-native tool calling** (funct
 - **WHEN** a tool_call is write/side-effecting (e.g., non-allowlisted terminal command, wake_on_lan, cockpit restart_service) and not yet confirmed
 - **THEN** execution pauses and the system asks for approval, persisting the pending tool-call conversation
 - **AND** on the user's approval the next turn resumes and executes the approved tool_call.
+- **AND** a tool may also request confirmation after it starts (e.g. `analyze_video_url` for videos longer than 6 minutes) by returning `needs_confirmation`; the same pause/resume applies.
+
+#### Scenario: Confirmation Reply Options
+- **WHEN** execution pauses for confirmation
+- **THEN** the reply must carry `options` = `[{"label": "好，繼續", "text": "好"}, {"label": "取消", "text": "取消"}]` (written to `turns.options`; `/chat` returns it in the response).
+
+#### Scenario: Strict Confirmation Matching
+- **WHEN** a user replies while a confirmation is pending
+- **THEN** the whole reply (whitespace and punctuation removed, case-insensitive) must exactly equal an affirmative word (好、好的、可以、確認、繼續、yes、ok、go…) to resume; substrings such as 「不好」「不可以」 must not count
+- **AND** a reply that exactly equals a cancel word (取消、不要、不用了、算了、no…) must clear the pending confirmation and answer 「好，已取消。」 without calling an LLM
+- **AND** any other reply clears the pending confirmation and is handled as a normal message.
 
 #### Scenario: Attachment Path Unchanged
 - **WHEN** a message carries an attachment
