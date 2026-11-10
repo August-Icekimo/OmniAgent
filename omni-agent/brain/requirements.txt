@@ -30,6 +30,7 @@ av<18  # faster-whisper 1.2.1 與 av 19 不相容（open() metadata_errors TypeE
 pypdf>=4.0.0
 trafilatura>=2.0.0  # fetch_url 正文擷取（web-fetch-tool，2026-11-06 admin 核准）
 playwright>=1.50.0  # fetch_url JS 動態頁渲染（headless Chromium）
+yt-dlp>=2026.10.26  # analyze_video_url 短影音下載（short-video-fetch）；刻意不設上限：平台改版就壞，要靠升級追，更新走 scripts/update_ytdlp.sh
 openpyxl>=3.1.0
 pandas>=2.0.0
 lottie>=0.6.11

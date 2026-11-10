@@ -14,6 +14,12 @@ def build_gemini_parts(content) -> list[types.Part]:
             ptype = p.get("type")
             if ptype == "text":
                 parts.append(types.Part(text=p["text"]))
+            elif ptype == "video" and p.get("file_uri"):
+                # Gemini 可直讀的遠端影片（目前僅 YouTube URL，short-video-fetch）
+                parts.append(types.Part(file_data=types.FileData(
+                    file_uri=p["file_uri"],
+                    mime_type=p.get("mime_type") or "video/mp4",
+                )))
             elif ptype in ("image", "audio", "video"):
                 data = p["data"]
                 if isinstance(data, str):

@@ -39,6 +39,38 @@ type SendOptions struct {
 	ReplyTokenExpiresAt int64  // unix 秒；0 視為不可用
 	QuoteToken          string // LINE：帶上可在回覆顯示引用框
 	ReplyToMessageID    string // Telegram：標注回覆的原訊息 id
+	// 可點選選項（reply-quick-options）：LINE → Quick Reply、Telegram → Inline Keyboard。
+	// 只掛在最後一則訊息上；點按後以使用者身分送出 Text。
+	QuickReplies []ReplyOption
+}
+
+// ReplyOption 是一個可點選選項：Label 顯示在按鈕上，Text 為點按後送出的文字。
+// 對應 turns.options / line_pending_replies.options 的 JSON 元素。
+type ReplyOption struct {
+	Label string `json:"label"`
+	Text  string `json:"text"`
+}
+
+// ParseReplyOptions 解析 DB 的 options JSONB；空值或格式錯誤回 nil（不帶按鈕，退回純文字）。
+func ParseReplyOptions(raw []byte) []ReplyOption {
+	if len(raw) == 0 {
+		return nil
+	}
+	var opts []ReplyOption
+	if err := json.Unmarshal(raw, &opts); err != nil {
+		log.Printf("reply options: invalid JSON ignored: %v", err)
+		return nil
+	}
+	valid := opts[:0]
+	for _, o := range opts {
+		if o.Label != "" && o.Text != "" {
+			valid = append(valid, o)
+		}
+	}
+	if len(valid) == 0 {
+		return nil
+	}
+	return valid
 }
 
 func (o *SendOptions) replyTokenUsable() bool {
@@ -152,6 +184,45 @@ type lineMessage struct {
 	// Template Buttons（慢回應 postback 用），與 Text 互斥
 	AltText  string        `json:"altText,omitempty"`
 	Template *lineTemplate `json:"template,omitempty"`
+
+	// Quick Reply（reply-quick-options）：只能掛在單次 API call 的最後一則訊息才會顯示
+	QuickReply *lineQuickReply `json:"quickReply,omitempty"`
+}
+
+type lineQuickReply struct {
+	Items []lineQuickReplyItem `json:"items"`
+}
+
+type lineQuickReplyItem struct {
+	Type   string     `json:"type"` // 固定 "action"
+	Action lineAction `json:"action"`
+}
+
+// LINE Quick Reply 上限：最多 13 個項目、label ≤ 20 字。
+const (
+	lineQuickReplyMaxItems = 13
+	lineQuickReplyMaxLabel = 20
+)
+
+func buildLineQuickReply(options []ReplyOption) *lineQuickReply {
+	if len(options) == 0 {
+		return nil
+	}
+	qr := &lineQuickReply{}
+	for i, o := range options {
+		if i >= lineQuickReplyMaxItems {
+			break
+		}
+		label := []rune(o.Label)
+		if len(label) > lineQuickReplyMaxLabel {
+			label = label[:lineQuickReplyMaxLabel]
+		}
+		qr.Items = append(qr.Items, lineQuickReplyItem{
+			Type:   "action",
+			Action: lineAction{Type: "message", Label: string(label), Text: o.Text},
+		})
+	}
+	return qr
 }
 
 type lineTemplate struct {
@@ -163,7 +234,8 @@ type lineTemplate struct {
 type lineAction struct {
 	Type  string `json:"type"`
 	Label string `json:"label"`
-	Data  string `json:"data"`
+	Data  string `json:"data,omitempty"` // postback action
+	Text  string `json:"text,omitempty"` // message action（Quick Reply 用）
 }
 
 // chunkTextUTF16 以 UTF-16 code unit 計數切段（Telegram 的長度單位）：
@@ -214,14 +286,7 @@ func chunkText(text string, size int) []string {
 // sendLineText 切段並投遞：首批優先 Reply（免費），失敗或 token 不可用則 Push；
 // 後續批次一律 Push（reply token 單次使用）。
 func sendLineText(lineID, text string, opts *SendOptions) error {
-	var messages []lineMessage
-	for i, chunk := range chunkText(text, lineChunkSize) {
-		m := lineMessage{Type: "text", Text: chunk}
-		if i == 0 && opts != nil {
-			m.QuoteToken = opts.QuoteToken
-		}
-		messages = append(messages, m)
-	}
+	messages := buildLineMessages(text, opts)
 
 	var firstErr error
 	for start := 0; start < len(messages); start += lineBatchSize {
@@ -249,6 +314,23 @@ func sendLineText(lineID, text string, opts *SendOptions) error {
 	return firstErr
 }
 
+// buildLineMessages 切段成 LINE 文字訊息：首段掛引用框，Quick Reply 掛在最後一則
+// （最後一則必落在最後一批，該批 API call 的最後一則才會顯示 Quick Reply）。
+func buildLineMessages(text string, opts *SendOptions) []lineMessage {
+	var messages []lineMessage
+	for i, chunk := range chunkText(text, lineChunkSize) {
+		m := lineMessage{Type: "text", Text: chunk}
+		if i == 0 && opts != nil {
+			m.QuoteToken = opts.QuoteToken
+		}
+		messages = append(messages, m)
+	}
+	if opts != nil && len(messages) > 0 {
+		messages[len(messages)-1].QuickReply = buildLineQuickReply(opts.QuickReplies)
+	}
+	return messages
+}
+
 // SendLineReply 以 reply token 投遞訊息（單次使用、免費）。
 func SendLineReply(replyToken string, messages []lineMessage) error {
 	body := struct {
@@ -259,12 +341,14 @@ func SendLineReply(replyToken string, messages []lineMessage) error {
 }
 
 // SendLineReplyText 是 SendLineReply 的純文字便利包裝（postback 回覆用），
-// 同樣套用切段；超過首批 5 則的部分改 Push。quoteToken 非空時首段帶引用框。
-func SendLineReplyText(replyToken, lineID, text, quoteToken string) error {
+// 同樣套用切段；超過首批 5 則的部分改 Push。quoteToken 非空時首段帶引用框；
+// options 非空時最後一則附 Quick Reply。
+func SendLineReplyText(replyToken, lineID, text, quoteToken string, options []ReplyOption) error {
 	return sendLineText(lineID, text, &SendOptions{
 		ReplyToken:          replyToken,
 		ReplyTokenExpiresAt: time.Now().Add(50 * time.Second).Unix(),
 		QuoteToken:          quoteToken,
+		QuickReplies:        options,
 	})
 }
 
@@ -440,16 +524,29 @@ func postLineAPI(url string, payload any) error {
 // Telegram
 // ---------------------------------------------------------------------------
 
-func sendTelegramMessage(chatID, text string, opts *SendOptions) error {
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
-	if token == "" {
-		return fmt.Errorf("TELEGRAM_BOT_TOKEN not set")
+// Telegram callback_data 上限 64 bytes；超過的選項略過（不會出現在按鈕上）。
+const telegramCallbackDataMax = 64
+
+func buildTelegramInlineKeyboard(options []ReplyOption) map[string]any {
+	var row []map[string]any
+	for _, o := range options {
+		if len(o.Text) > telegramCallbackDataMax {
+			log.Printf("Telegram: option %q skipped (callback_data > %d bytes)", o.Label, telegramCallbackDataMax)
+			continue
+		}
+		row = append(row, map[string]any{"text": o.Label, "callback_data": o.Text})
 	}
+	if len(row) == 0 {
+		return nil
+	}
+	return map[string]any{"inline_keyboard": [][]map[string]any{row}}
+}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
-
-	var firstErr error
-	for i, chunk := range chunkTextUTF16(text, telegramChunkSize) {
+// buildTelegramPayloads 切段成 sendMessage payload：reply 標注只掛首段，Inline Keyboard 只掛最後一段。
+func buildTelegramPayloads(chatID, text string, opts *SendOptions) []map[string]any {
+	chunks := chunkTextUTF16(text, telegramChunkSize)
+	payloads := make([]map[string]any, 0, len(chunks))
+	for i, chunk := range chunks {
 		payload := map[string]any{
 			"chat_id": chatID,
 			"text":    chunk,
@@ -464,7 +561,26 @@ func sendTelegramMessage(chatID, text string, opts *SendOptions) error {
 				}
 			}
 		}
+		if i == len(chunks)-1 && opts != nil {
+			if kb := buildTelegramInlineKeyboard(opts.QuickReplies); kb != nil {
+				payload["reply_markup"] = kb
+			}
+		}
+		payloads = append(payloads, payload)
+	}
+	return payloads
+}
 
+func sendTelegramMessage(chatID, text string, opts *SendOptions) error {
+	token := os.Getenv("TELEGRAM_BOT_TOKEN")
+	if token == "" {
+		return fmt.Errorf("TELEGRAM_BOT_TOKEN not set")
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
+
+	var firstErr error
+	for _, payload := range buildTelegramPayloads(chatID, text, opts) {
 		jsonBody, _ := json.Marshal(payload)
 		resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonBody))
 		if err != nil {
@@ -485,4 +601,43 @@ func sendTelegramMessage(chatID, text string, opts *SendOptions) error {
 	}
 
 	return firstErr
+}
+
+// AnswerTelegramCallback 回應按鈕點擊（不回應的話按鈕會持續轉圈）。best-effort。
+func AnswerTelegramCallback(callbackID string) {
+	if err := postTelegramAPI("answerCallbackQuery", map[string]any{"callback_query_id": callbackID}); err != nil {
+		log.Printf("Telegram: answerCallbackQuery failed (non-fatal): %v", err)
+	}
+}
+
+// RemoveTelegramInlineKeyboard 移除已點過的按鈕，避免重複點擊。best-effort。
+func RemoveTelegramInlineKeyboard(chatID string, messageID int) {
+	err := postTelegramAPI("editMessageReplyMarkup", map[string]any{
+		"chat_id":      chatID,
+		"message_id":   messageID,
+		"reply_markup": map[string]any{"inline_keyboard": [][]any{}},
+	})
+	if err != nil {
+		log.Printf("Telegram: editMessageReplyMarkup failed (non-fatal): %v", err)
+	}
+}
+
+func postTelegramAPI(method string, payload any) error {
+	token := os.Getenv("TELEGRAM_BOT_TOKEN")
+	if token == "" {
+		return fmt.Errorf("TELEGRAM_BOT_TOKEN not set")
+	}
+	jsonBody, _ := json.Marshal(payload)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(fmt.Sprintf("https://api.telegram.org/bot%s/%s", token, method),
+		"application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s status %d: %s", method, resp.StatusCode, body)
+	}
+	return nil
 }

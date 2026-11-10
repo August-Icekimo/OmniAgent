@@ -85,7 +85,9 @@ func failPendingLineReply(db *pgxpool.Pool, ctx context.Context, origMsg *model.
 
 // claimPendingLineReply 認領最早的 pending 列：寫入答案、轉 ready。
 // 回傳 true 表示答案改由 postback 取件，不做直接投遞。
-func claimPendingLineReply(db *pgxpool.Pool, ctx context.Context, origMsg *model.StandardMessage, replyText string) bool {
+//
+// options（turns.options 原始 JSONB，可為 nil）跟著快取，postback 取件時一起帶出 Quick Reply。
+func claimPendingLineReply(db *pgxpool.Pool, ctx context.Context, origMsg *model.StandardMessage, replyText string, options []byte) bool {
 	if origMsg.Platform != "line" {
 		return false
 	}
@@ -93,7 +95,7 @@ func claimPendingLineReply(db *pgxpool.Pool, ctx context.Context, origMsg *model
 	var rid string
 	err := db.QueryRow(ctx, `
 		UPDATE line_pending_replies
-		SET state = 'ready', payload = $1, updated_at = NOW()
+		SET state = 'ready', payload = $1, options = $3::jsonb, updated_at = NOW()
 		WHERE rid = (
 			SELECT rid FROM line_pending_replies
 			WHERE line_id = $2 AND state = 'pending'
@@ -101,10 +103,18 @@ func claimPendingLineReply(db *pgxpool.Pool, ctx context.Context, origMsg *model
 			LIMIT 1
 		)
 		RETURNING rid
-	`, replyText, lineID).Scan(&rid)
+	`, replyText, lineID, nullableJSON(options)).Scan(&rid)
 	if err != nil {
 		return false // 無 pending 列，正常直接投遞
 	}
 	log.Printf("LINE: reply cached for postback pickup (rid=%s)", rid)
 	return true
+}
+
+// nullableJSON 把空 JSONB 轉成 SQL NULL（pgx 對 nil []byte 傳 NULL，但空切片會變成空字串而 cast 失敗）。
+func nullableJSON(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return string(raw)
 }

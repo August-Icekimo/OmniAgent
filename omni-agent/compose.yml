@@ -56,6 +56,9 @@ services:
       # ChatGPT Plus（Sign in with ChatGPT）憑證：主機 scripts/siwc_login.py 產生；掛整個目錄且 rw，
       # brain 負責 refresh 輪替並原子寫回（rename 需要目錄寫入權）
       - ${SIWC_DIR:-${HOME}/.config/omni-agent/siwc}:/siwc
+      # 短影音下載用的平台登入 cookie（Netscape 格式，<platform>.txt）：admin 從瀏覽器匯出放主機，唯讀掛載；
+      # brain 每次複製到暫存再給 yt-dlp（yt-dlp 會回寫 cookie 檔）。目錄須先存在（podman 不會自動建立）
+      - ${YTDLP_COOKIE_HOST_DIR:-${HOME}/.config/omni-agent/ytdlp-cookies}:/ytdlp-cookies:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +75,8 @@ services:
       A2A_WORKSPACE: /a2a-workspace
       # ChatGPT provider 憑證檔（檔案不存在則不註冊該 provider）
       SIWC_CREDENTIALS: /siwc/credentials.json
+      # 短影音下載 cookie 目錄（brain 端掛載路徑）
+      YTDLP_COOKIE_DIR: /ytdlp-cookies
 
   skills:
     build:

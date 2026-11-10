@@ -30,6 +30,12 @@ def build_tools_prompt(skills_url: str | None = None) -> str:
   - params: {"urls": ["https://..."]}（最多 3 個）
   - 类型: [Read]
   - 只能讀公開網路；讀取失敗代表「頁面打不開」，不等於「查無資料」。
+  - 不處理影片：影片連結請改用 analyze_video_url。
+
+- analyze_video_url: 實際觀看影片連結的內容（YouTube、TikTok、Instagram Reels、抖音、X、小紅書、B站）。
+  - params: {"url": "影片網址", "instruction": "使用者想知道的重點（可省略）"}
+  - 类型: [Read]
+  - 只處理 15 分鐘內的單支影片（超過 6 分鐘系統會自動先徵求使用者同意）；失敗原因（需要 cookie、被平台封鎖、超過長度）請照實告訴使用者，不要假裝看過影片。
 
 - terminal: 在 HomeLab 沙箱環境執行 shell 命令（查看系統狀態、磁碟、程序、檔案等）。
   - params: {"command": "shell 命令字串", "timeout": 30, "background": false}

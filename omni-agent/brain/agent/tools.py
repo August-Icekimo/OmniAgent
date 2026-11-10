@@ -1,7 +1,7 @@
 """工具註冊表：skill → ToolSpec（provider-native function calling）+ 執行分派。
 
 ToolSpec 描述提供給模型（見 llm/base.py）；執行分派沿用既有 skill 實作
-（terminal→sandbox、web_search→SearXNG、fetch_url→brain 內抓取、其餘→SKILLS_URL）。安全把關（terminal
+（terminal→sandbox、web_search→SearXNG、fetch_url／analyze_video_url→brain 內抓取、其餘→SKILLS_URL）。安全把關（terminal
 admin 閘門、危險命令封鎖）在 graph 的工具迴圈執行前進行，不在此。
 """
 
@@ -71,6 +71,26 @@ TOOL_SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="analyze_video_url",
+        description=(
+            "看影片連結的內容（YouTube、TikTok、Instagram Reels、抖音、X、小紅書、B站）："
+            "下載影片後交給多模態模型實際觀看，回傳影片內容描述。"
+            "使用者丟短影音／影片連結、問「這影片在講什麼」時用；影片連結不要用 fetch_url（它只讀網頁文字）。"
+            "只處理 15 分鐘內的單支影片（超過 6 分鐘系統會自動先問使用者）。失敗訊息（需要 cookie、被平台封鎖、超過長度…）請照實轉述給使用者。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "影片網址（含分享短網址，如 vt.tiktok.com）"},
+                "instruction": {
+                    "type": "string",
+                    "description": "使用者想知道的重點（例如「影片裡的食譜步驟」）；沒有特別要求可省略",
+                },
+            },
+            "required": ["url"],
+        },
+    ),
+    ToolSpec(
         name="delegate_to_specialist",
         description=(
             "把『長文摘要/總結』這類外包工作，委派給隔離容器中的 specialist agent 處理。"
@@ -125,15 +145,19 @@ def tool_needs_confirmation(name: str, args: dict) -> bool:
     """
     # delegate_to_specialist：摘要類唯讀工作，無真實世界副作用 → 不需確認。
     # fetch_url：唯讀 GET（SSRF 已擋內網），無副作用 → 不需確認。
-    if name in ("web_search", "fetch_url", "terminal", "delegate_to_specialist"):
+    # analyze_video_url：唯讀下載＋分析、暫存即刪，無副作用 → 不需確認。
+    if name in ("web_search", "fetch_url", "analyze_video_url", "terminal", "delegate_to_specialist"):
         return False
     if name == "cockpit":
         return (args or {}).get("action") == "restart_service"
     return True  # wake_on_lan 及未知工具：保守視為寫入需確認
 
 
-async def execute_tool(name: str, args: dict, model_router) -> dict:
-    """執行單一工具，回傳統一 dict 結果（沿用既有 skill 實作）。"""
+async def execute_tool(name: str, args: dict, model_router, confirmed: bool = False) -> dict:
+    """執行單一工具，回傳統一 dict 結果（沿用既有 skill 實作）。
+
+    confirmed：本輪是使用者同意後的確認往返恢復（供「執行中才知道要不要問」的工具使用，
+    例如 analyze_video_url 的長影片）。"""
     args = args or {}
 
     if name == "terminal":
@@ -193,6 +217,11 @@ async def execute_tool(name: str, args: dict, model_router) -> dict:
     if name == "fetch_url":
         from skills.web_fetch import fetch_urls
         return await fetch_urls(args.get("urls") or args.get("url") or [])
+
+    if name == "analyze_video_url":
+        from skills.video_fetch import analyze_video_url
+        return await analyze_video_url(args.get("url"), args.get("instruction"), model_router,
+                                       confirmed=confirmed)
 
     # 其餘技能（wake_on_lan / cockpit …）走 Go Skills Server
     skills_url = os.getenv("SKILLS_URL")
