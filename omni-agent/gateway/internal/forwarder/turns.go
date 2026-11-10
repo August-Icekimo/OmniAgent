@@ -246,15 +246,16 @@ func deliverDoneTurn(db *pgxpool.Pool) bool {
 
 	var turnID, userID, platform, result string
 	var attempts int
+	var optionsRaw []byte // turns.options（reply-quick-options）；NULL = 無按鈕
 	err = tx.QueryRow(ctx, `
-		SELECT id, user_id::text, platform, COALESCE(result, ''), delivery_attempts
+		SELECT id, user_id::text, platform, COALESCE(result, ''), delivery_attempts, options
 		FROM turns
 		WHERE status = 'done'
 		  AND (next_delivery_at IS NULL OR NOW() >= next_delivery_at)
 		ORDER BY next_delivery_at ASC NULLS FIRST, updated_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
-	`).Scan(&turnID, &userID, &platform, &result, &attempts)
+	`).Scan(&turnID, &userID, &platform, &result, &attempts, &optionsRaw)
 	if err != nil {
 		return false
 	}
@@ -283,7 +284,7 @@ func deliverDoneTurn(db *pgxpool.Pool) bool {
 	}
 
 	// 慢回應按鈕已送出：答案進快取，改由 postback 取件（不經平台 API，視為投遞成功）。
-	if claimPendingLineReply(db, ctx, &lastMsg, result) {
+	if claimPendingLineReply(db, ctx, &lastMsg, result, optionsRaw) {
 		log.Printf("turn deliver: turn %s cached for LINE postback", turnID)
 		markTurnDelivered(tx, ctx, turnID)
 		tx.Commit(ctx)
@@ -296,6 +297,7 @@ func deliverDoneTurn(db *pgxpool.Pool) bool {
 		ReplyToken:          lastMsg.ReplyToken,
 		ReplyTokenExpiresAt: lastMsg.ReplyTokenExpiresAt,
 		QuoteToken:          lastMsg.QuoteToken,
+		QuickReplies:        messenger.ParseReplyOptions(optionsRaw),
 	}
 	if attempts > 0 {
 		opts.ReplyToken = ""

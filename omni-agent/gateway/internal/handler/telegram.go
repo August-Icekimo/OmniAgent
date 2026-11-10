@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"omni-agent/gateway/internal/messenger"
@@ -22,52 +23,71 @@ import (
 )
 
 type telegramUpdate struct {
-	UpdateID int `json:"update_id"`
-	Message  *struct {
+	UpdateID      int                    `json:"update_id"`
+	Message       *telegramMessage       `json:"message"`
+	CallbackQuery *telegramCallbackQuery `json:"callback_query"`
+}
+
+// telegramCallbackQuery：使用者點 Inline Keyboard 按鈕（reply-quick-options）。
+// Data 為按鈕要以使用者身分送出的文字；Message 為帶按鈕的那則 bot 訊息。
+type telegramCallbackQuery struct {
+	ID   string `json:"id"`
+	From struct {
+		ID int64 `json:"id"`
+	} `json:"from"`
+	Message *struct {
 		MessageID int `json:"message_id"`
-		From      struct {
-			ID int64 `json:"id"`
-		} `json:"from"`
-		Chat struct {
+		Chat      struct {
 			ID int64 `json:"id"`
 		} `json:"chat"`
-		Text  string `json:"text"`
-		Photo []struct {
-			FileID       string `json:"file_id"`
-			FileUniqueID string `json:"file_unique_id"`
-			FileSize     int64  `json:"file_size"`
-		} `json:"photo"`
-		Document *struct {
-			FileID   string `json:"file_id"`
-			FileName string `json:"file_name"`
-			MimeType string `json:"mime_type"`
-			FileSize int64  `json:"file_size"`
-		} `json:"document"`
-		Voice *struct {
-			FileID   string `json:"file_id"`
-			Duration int    `json:"duration"`
-			MimeType string `json:"mime_type"`
-			FileSize int64  `json:"file_size"`
-		} `json:"voice"`
-		Sticker *struct {
-			FileID     string `json:"file_id"`
-			IsAnimated bool   `json:"is_animated"`
-			IsVideo    bool   `json:"is_video"`
-			FileSize   int64  `json:"file_size"`
-		} `json:"sticker"`
-		Animation *struct {
-			FileID   string `json:"file_id"`
-			FileName string `json:"file_name"`
-			MimeType string `json:"mime_type"`
-			FileSize int64  `json:"file_size"`
-		} `json:"animation"`
-		Video *struct {
-			FileID   string `json:"file_id"`
-			Duration int    `json:"duration"`
-			FileSize int64  `json:"file_size"`
-		} `json:"video"`
-		Caption string `json:"caption"`
 	} `json:"message"`
+	Data string `json:"data"`
+}
+
+type telegramMessage struct {
+	MessageID int `json:"message_id"`
+	From      struct {
+		ID int64 `json:"id"`
+	} `json:"from"`
+	Chat struct {
+		ID int64 `json:"id"`
+	} `json:"chat"`
+	Text  string `json:"text"`
+	Photo []struct {
+		FileID       string `json:"file_id"`
+		FileUniqueID string `json:"file_unique_id"`
+		FileSize     int64  `json:"file_size"`
+	} `json:"photo"`
+	Document *struct {
+		FileID   string `json:"file_id"`
+		FileName string `json:"file_name"`
+		MimeType string `json:"mime_type"`
+		FileSize int64  `json:"file_size"`
+	} `json:"document"`
+	Voice *struct {
+		FileID   string `json:"file_id"`
+		Duration int    `json:"duration"`
+		MimeType string `json:"mime_type"`
+		FileSize int64  `json:"file_size"`
+	} `json:"voice"`
+	Sticker *struct {
+		FileID     string `json:"file_id"`
+		IsAnimated bool   `json:"is_animated"`
+		IsVideo    bool   `json:"is_video"`
+		FileSize   int64  `json:"file_size"`
+	} `json:"sticker"`
+	Animation *struct {
+		FileID   string `json:"file_id"`
+		FileName string `json:"file_name"`
+		MimeType string `json:"mime_type"`
+		FileSize int64  `json:"file_size"`
+	} `json:"animation"`
+	Video *struct {
+		FileID   string `json:"file_id"`
+		Duration int    `json:"duration"`
+		FileSize int64  `json:"file_size"`
+	} `json:"video"`
+	Caption string `json:"caption"`
 }
 
 func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
@@ -95,6 +115,16 @@ func TelegramWebhook(db *pgxpool.Pool) gin.HandlerFunc {
 		if err := json.Unmarshal(body, &payload); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
 			return
+		}
+
+		// 按鈕點擊：轉成「使用者送出按鈕文字」的一般文字訊息，走下方同一條流程
+		if payload.Message == nil && payload.CallbackQuery != nil {
+			msg, ok := callbackToMessage(c.Request.Context(), db, payload.CallbackQuery)
+			if !ok {
+				c.JSON(http.StatusOK, gin.H{"status": "callback_ignored"})
+				return
+			}
+			payload.Message = msg
 		}
 
 		// Only handle message events
@@ -416,4 +446,63 @@ func downloadTelegramFile(ctx context.Context, userID, fileID, fileName, mimeTyp
 		SizeBytes: fileSize,
 		LocalPath: localPath,
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Inline Keyboard 按鈕點擊（reply-quick-options）
+// ---------------------------------------------------------------------------
+
+// 同一則 bot 訊息的按鈕只認第一次點擊：移除按鈕的 API 呼叫前若連點，第二次在此被擋下。
+// in-memory 即可：gateway 單一行程；重啟後按鈕早已移除，遺失 registry 無影響。
+var (
+	callbackClaimMu sync.Mutex
+	callbackClaims  = map[string]time.Time{}
+)
+
+const callbackClaimTTL = 10 * time.Minute
+
+func claimCallbackMessage(chatID int64, messageID int) bool {
+	key := fmt.Sprintf("%d:%d", chatID, messageID)
+	now := time.Now()
+	callbackClaimMu.Lock()
+	defer callbackClaimMu.Unlock()
+	for k, t := range callbackClaims {
+		if now.Sub(t) > callbackClaimTTL {
+			delete(callbackClaims, k)
+		}
+	}
+	if _, taken := callbackClaims[key]; taken {
+		return false
+	}
+	callbackClaims[key] = now
+	return true
+}
+
+// callbackToMessage 處理按鈕點擊：一律 answerCallbackQuery（否則按鈕持續轉圈）；
+// 僅已知使用者、首次點擊才移除按鈕並轉成文字訊息。陌生人／未知 chat 不處理也不回覆。
+func callbackToMessage(ctx context.Context, db *pgxpool.Pool, cq *telegramCallbackQuery) (*telegramMessage, bool) {
+	go messenger.AnswerTelegramCallback(cq.ID)
+
+	if cq.Message == nil || cq.Data == "" {
+		return nil, false
+	}
+	chatID := cq.Message.Chat.ID
+	var role string
+	err := db.QueryRow(ctx,
+		"SELECT u.role FROM users u JOIN telegram_accounts ta ON u.id = ta.user_id WHERE ta.chat_id = $1",
+		strconv.FormatInt(chatID, 10)).Scan(&role)
+	if err != nil || role == "stranger" {
+		log.Printf("Telegram: callback from unknown chat %d ignored", chatID)
+		return nil, false
+	}
+	if !claimCallbackMessage(chatID, cq.Message.MessageID) {
+		log.Printf("Telegram: duplicate callback on message %d ignored", cq.Message.MessageID)
+		return nil, false
+	}
+	go messenger.RemoveTelegramInlineKeyboard(strconv.FormatInt(chatID, 10), cq.Message.MessageID)
+
+	msg := &telegramMessage{MessageID: cq.Message.MessageID, Text: cq.Data}
+	msg.From.ID = cq.From.ID
+	msg.Chat.ID = chatID
+	return msg, true
 }

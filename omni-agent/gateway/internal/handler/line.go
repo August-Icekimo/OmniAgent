@@ -277,16 +277,17 @@ func handleLinePostback(db *pgxpool.Pool, lineID, replyToken, data string) {
 	// 原子認領：只有 ready 列會轉 delivered 並取得 payload 與原訊息引用 token
 	var payload string
 	var quoteToken *string
+	var optionsRaw []byte
 	err := db.QueryRow(ctx,
-		"UPDATE line_pending_replies SET state = 'delivered', updated_at = NOW() WHERE rid = $1 AND state = 'ready' RETURNING payload, quote_token",
-		rid).Scan(&payload, &quoteToken)
+		"UPDATE line_pending_replies SET state = 'delivered', updated_at = NOW() WHERE rid = $1 AND state = 'ready' RETURNING payload, quote_token, options",
+		rid).Scan(&payload, &quoteToken, &optionsRaw)
 	if err == nil {
 		qt := ""
 		if quoteToken != nil {
 			qt = *quoteToken
 		}
 		// SendLineReplyText 內建 reply→push fallback，標記 delivered 後不會丟失
-		if sendErr := messenger.SendLineReplyText(replyToken, lineID, payload, qt); sendErr != nil {
+		if sendErr := messenger.SendLineReplyText(replyToken, lineID, payload, qt, messenger.ParseReplyOptions(optionsRaw)); sendErr != nil {
 			log.Printf("LINE: postback delivery failed for rid %s: %v", rid, sendErr)
 		}
 		return
@@ -307,7 +308,7 @@ func handleLinePostback(db *pgxpool.Pool, lineID, replyToken, data string) {
 			hint = "剛才處理的時候出了點狀況，麻煩再問我一次。"
 		}
 	}
-	if sendErr := messenger.SendLineReplyText(replyToken, lineID, hint, ""); sendErr != nil {
+	if sendErr := messenger.SendLineReplyText(replyToken, lineID, hint, "", nil); sendErr != nil {
 		log.Printf("LINE: postback hint send failed for rid %s: %v", rid, sendErr)
 	}
 }
