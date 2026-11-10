@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 
 from llm import Message, Role, ModelRouter, ToolCall
 from .tools import TOOL_SPECS, execute_tool, tool_needs_confirmation
+from .confirm import CONFIRM_OPTIONS
 
 logger = logging.getLogger("brain.agent")
 
@@ -89,6 +90,8 @@ class AgentState(TypedDict):
     # 寫入型工具確認往返：恢復執行旗標 + 待持久化的 pending（給 main.py 存 confirm:pending）
     resume_tools: bool
     pending_tools: Optional[Dict[str, Any]]
+    # 回覆附的可點選選項 [{label, text}]（確認往返時為「好，繼續／取消」；reply-quick-options）
+    reply_options: Optional[List[Dict[str, str]]]
 
 
 # --- 訊息序列化（確認往返時存進 home_context，跨回合恢復用）---
@@ -370,6 +373,7 @@ async def tools_node(state: AgentState):
         if tool_needs_confirmation(name, args) and not confirmed:
             out["messages"] = messages
             out["final_reply"] = f"好的，我準備幫你「{_describe_tool(name, args)}」。這會變更系統狀態，請問這樣可以嗎？"
+            out["reply_options"] = CONFIRM_OPTIONS
             out["pending_tools"] = {
                 "messages": serialize_messages(resume_snapshot),
                 "tool_iterations": state.get("tool_iterations", 0),
@@ -383,6 +387,7 @@ async def tools_node(state: AgentState):
         if isinstance(result, dict) and result.get("needs_confirmation") and not confirmed:
             out["messages"] = messages
             out["final_reply"] = result.get("question") or f"要繼續「{_describe_tool(name, args)}」嗎？"
+            out["reply_options"] = CONFIRM_OPTIONS
             out["pending_tools"] = {
                 "messages": serialize_messages(resume_snapshot),
                 "tool_iterations": state.get("tool_iterations", 0),

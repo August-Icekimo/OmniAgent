@@ -21,6 +21,7 @@ import asyncpg
 import terminal_logs
 
 from llm import Message, Role, create_default_router
+from agent.confirm import CANCELLED_REPLY, is_affirmative, is_cancel
 from soul.loader import SoulLoader
 from memory.short_term import ShortTermMemory
 from memory.long_term import LongTermMemory
@@ -176,6 +177,8 @@ class BrainResponse(BaseModel):
     # 0 表示資料缺失，gateway 據此省略對應欄位。
     context_tokens: int = 0
     context_length: int = 0
+    # 可點選選項 [{label, text}]（reply-quick-options）；None = 無按鈕
+    options: list[dict] | None = None
 
 
 class TurnRequest(BaseModel):
@@ -513,6 +516,7 @@ def _empty_conv_result(reason: str, *, cancelled=False, multimodal_failed=False)
         "routing_reason": reason,
         "context_tokens": 0,
         "context_length": 0,
+        "options": None,
     }
 
 
@@ -665,6 +669,7 @@ async def _execute_conversation(
         "routing_reason": final_state.get("routing_reason"),
         "context_tokens": context_tokens,
         "context_length": router.context_length(provider_name),
+        "options": final_state.get("reply_options"),
     }
 
 
@@ -706,12 +711,15 @@ async def chat(msg: StandardMessage):
     if pool:
         pending_check = await pool.fetchrow("SELECT value FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
         if pending_check:
-            if any(word in msg.text.lower() for word in ["好", "可以", "確認", "yes", "go"]):
+            await pool.execute("DELETE FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
+            if is_cancel(msg.text):
+                return BrainResponse(reply_text=CANCELLED_REPLY, model_used="none", provider="none",
+                                     routing_reason="confirmation_cancelled")
+            if is_affirmative(msg.text):
                 confirmation_received = True
                 pdata = json.loads(pending_check['value'])
                 resume_messages = pdata.get("messages")
                 resume_iterations = pdata.get("tool_iterations", 0)
-            await pool.execute("DELETE FROM home_context WHERE key = $1", f"confirm:pending:{msg.user_id}")
 
     # 2. 組合 user content 後交由共用核心執行（與 /turn 同一條路徑）
     if msg.attachment:
@@ -746,6 +754,7 @@ async def chat(msg: StandardMessage):
             routing_reason=result["routing_reason"],
             context_tokens=result["context_tokens"],
             context_length=result["context_length"],
+            options=result.get("options"),
         )
 
     except Exception as e:
@@ -762,7 +771,7 @@ async def turn(req: TurnRequest):
     return {"accepted": True, "turn_id": req.turn_id}
 
 
-async def _finish_turn(pool, turn_id: str, result: str, *, status: str):
+async def _finish_turn(pool, turn_id: str, result: str, *, status: str, options: list | None = None):
     """把 turn 的最終狀態寫回 DB。commit_passed 僅在正常完成（done）時置 true。
     以 status='processing' 為條件，避免覆寫已被其他流程改動的 turn。"""
     if not pool:
@@ -770,10 +779,11 @@ async def _finish_turn(pool, turn_id: str, result: str, *, status: str):
     await pool.execute(
         """
         UPDATE turns
-        SET status = $2, result = $3, commit_passed = $4, updated_at = NOW()
+        SET status = $2, result = $3, commit_passed = $4, options = $5::jsonb, updated_at = NOW()
         WHERE id = $1 AND status = 'processing'
         """,
         uuid.UUID(turn_id), status, result or None, status == "done",
+        json.dumps(options, ensure_ascii=False) if options else None,
     )
 
 
@@ -852,13 +862,17 @@ async def _process_turn_core(req: TurnRequest):
             pending_check = await pool.fetchrow(
                 "SELECT value FROM home_context WHERE key = $1", f"confirm:pending:{req.user_id}")
             if pending_check:
-                if any(w in user_content.lower() for w in ["好", "可以", "確認", "yes", "go"]):
+                await pool.execute(
+                    "DELETE FROM home_context WHERE key = $1", f"confirm:pending:{req.user_id}")
+                # 整句比對（agent/confirm.py）：「不好」「不可以」不再被當成同意
+                if is_cancel(user_content):
+                    await _finish_turn(pool, turn_id, CANCELLED_REPLY, status="done")
+                    return
+                if is_affirmative(user_content):
                     confirmation_received = True
                     pdata = json.loads(pending_check["value"])
                     resume_messages = pdata.get("messages")
                     resume_iterations = pdata.get("tool_iterations", 0)
-                await pool.execute(
-                    "DELETE FROM home_context WHERE key = $1", f"confirm:pending:{req.user_id}")
 
         # 3. cancel-on-withdrawal：輪詢 turns.cancel_requested（gateway 偵測到撤回時置位）。
         async def cancel_check() -> bool:
@@ -888,7 +902,7 @@ async def _process_turn_core(req: TurnRequest):
 
         reply = result["reply_text"] + stt_echo + _build_footer(
             result["model_used"], result["context_tokens"], result["context_length"])
-        await _finish_turn(pool, turn_id, reply, status="done")
+        await _finish_turn(pool, turn_id, reply, status="done", options=result.get("options"))
 
     except Exception as e:
         logger.error(f"turn processing failed (turn={turn_id}): {e}")
