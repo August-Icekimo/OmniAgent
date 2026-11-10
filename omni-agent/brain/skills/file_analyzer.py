@@ -312,20 +312,23 @@ class FileAnalyzer:
             logger.error(f"Sticker analysis error: {e}")
             return "[sticker]"
 
+    async def video_chat(self, video_part: dict, instruction: Optional[str], caller: str = "video_analysis") -> str:
+        """送單一 video part（inline data 或 file_uri）給模型分析；失敗會 raise（呼叫端自行分類）。
+
+        router 的多模態閘門會把 video payload 限定給 gemini。"""
+        prompt = f"請分析這段影片，並根據指示進行回答。\n指示：{instruction or '請描述影片發生的事情與主要人物/物體'}"
+        content = [video_part, {"type": "text", "text": prompt}]
+        response = await self.router.chat([Message(role=Role.USER, content=content)], caller=caller)
+        return response.content
+
     async def _analyze_video(self, path: str, mime_type: str, instruction: Optional[str]) -> str:
         """使用 Gemini Native Video 分析影片內容。"""
         try:
             with open(path, "rb") as f:
                 video_data = base64.b64encode(f.read()).decode("utf-8")
-
-            prompt = f"請分析這段影片，並根據指示進行回答。\n指示：{instruction or '請描述影片發生的事情與主要人物/物體'}"
-            content = [
-                {"type": "video", "mime_type": mime_type, "data": video_data},
-                {"type": "text", "text": prompt}
-            ]
-
-            response = await self.router.chat([Message(role=Role.USER, content=content)])
-            return response.content
+            return await self.video_chat(
+                {"type": "video", "mime_type": mime_type, "data": video_data}, instruction
+            )
         except Exception as e:
             logger.error(f"Video analysis error: {e}")
             return f"影片分析失敗：{str(e)}"
