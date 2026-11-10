@@ -38,6 +38,9 @@ video > 10s 列 out-of-scope，僅 log warning + 文字 placeholder），非退�
 ## Open questions
 - **檔案大小**：file_analyzer 目前把整支影片 base64 inline 塞進請求，未走
   Gemini File API。一分多鐘影片可能撞 inline ~20MB 上限 → 需要大小判斷
+  - 2026-11-10 註：`short-video-fetch`（PR #14）已在 `brain/skills/video_fetch.py` 實作
+    「> 15MB 以 ffmpeg 依長度降解析度／fps／位元率」（`transcode_params`、`_transcode`），
+    動工時可直接重用，不必先接 File API。注意該路徑只服務連結下載，`_analyze_video` 本身仍未做大小判斷。
   或改走 File API upload（此題 Telegram 影片同樣有，建議一併處理）。
 - LINE content endpoint 對大型影片是否有自己的下載上限／需分段？
 
