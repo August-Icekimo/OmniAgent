@@ -62,7 +62,6 @@ ssh 100.88.136.117 "rapid-mlx --version 2>/dev/null || /opt/homebrew/bin/rapid-m
 
 ## 已知注意事項
 
-- `brew upgrade rapid-mlx` 後需重裝 Pillow：`pip install Pillow` 進 Cellar venv，否則 `--mllm` 啟動 crash。
-- `--pin-system-prompt` 在 `--mllm` 模式下測試無效（Task 5 blocked）。
-- 伺服器端雖有 running-request abort 實作，但 `cancelled:true` 是假確認，實測不會真停。
-- Prompt cache 預設關閉。
+- local 已於 2026-10 移出 brain 路由（觀察中），此服務非生產必要。
+- `brew upgrade rapid-mlx` 後要進 Cellar venv 補 `Pillow` 與 `mlx-vlm==0.6.17`（**不可** `--force-reinstall`），否則 `--mllm` 啟動 crash。
+- `--version` 讀的是磁碟版本，要確認運行版請比對 process 啟動時間。
