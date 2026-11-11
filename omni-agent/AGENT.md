@@ -42,9 +42,9 @@ Real World (LINE / Telegram / iMessage)
 │  · Conversation state (LangGraph)       │
 │  · SoulLoader: build system prompt      │
 │  · ModelRouter: vendor SDK routing      │
-│    ├─ Claude (anthropic SDK + cache)    │
-│    ├─ Gemini (google-genai API Key)      │
-│    └─ Local MLX (openai SDK → Mac Mini) │
+│    ├─ ChatGPT (openai SDK, SIWC)        │
+│    ├─ Gemini (google-genai API Key)     │
+│    └─ Claude (anthropic SDK + cache)    │
 │  · Skills: web search, terminal, files  │
 │  · RAG memory retrieval (pgvector)      │
 └───────────────┬─────────────────────────┘
@@ -65,7 +65,7 @@ Real World (LINE / Telegram / iMessage)
 |------|------|-------------|
 | Synology NAS (DSM) | Front-door | Caddy + WAF, CrowdSec, Guacamole |
 | Debian 13 | Compute | Senses, Brain, Hippocampus (Podman) |
-| Mac Mini M4 | Inference | mlx-lm, OpenAI-compatible API |
+| Mac Mini M4 | Inference (retired from routing 2026-10) | rapid-mlx, OpenAI-compatible API |
 
 ---
 
@@ -141,103 +141,19 @@ Full DDL in `db/migrations/`. Reference `db/SCHEMA.md`.
 
 ## 4. Project Structure
 
-```
-omni-agent/
-├── compose.yml                    # Podman-compatible
-├── .env / .env.example
-├── AGENT.md                       # This file (engineering constitution)
-├── CLAUDE.md                      # Claude Code supplement
-├── GEMINI.md                      # Gemini/Antigravity supplement
-├── SOUL.md                        # Cindy's soul (git-managed)
-│
-├── gateway/                       # The Senses (Go)
-│   ├── cmd/server/main.go
-│   └── internal/
-│       ├── handler/               # line, telegram, bluebubbles, health
-│       ├── model/standard_message.go
-│       ├── stress/manager.go      # Cerebellum
-│       ├── forwarder/brain.go
-│       ├── queue/queue.go
-│       └── messenger/messenger.go
-│
-├── brain/                         # The Brain (Python)
-│   ├── main.py                    # FastAPI entry
-│   ├── agent/
-│   │   ├── graph.py               # LangGraph state machine
-│   │   ├── proactive.py           # Proactive push
-│   │   └── prompts/               # system_prompt.py, tools_prompt.py
-│   ├── llm/                       # ModelRouter + vendor SDKs
-│   │   ├── base.py                # ModelClient ABC
-│   │   ├── claude_client.py       # anthropic SDK + prompt caching
-│   │   ├── gemini_client.py       # google-genai SDK + context caching
-│   │   ├── local_client.py        # openai SDK → Mac Mini MLX
-│   │   └── router.py              # Routing + escalation
-│   ├── config/
-│   │   ├── routing_config.json    # Provider rules
-│   │   └── config_loader.py
-│   ├── memory/
-│   │   ├── short_term.py          # conversations table
-│   │   └── long_term.py           # pgvector RAG
-│   ├── skills/                    # In-process skill implementations
-│   │   ├── file_analyzer.py
-│   │   ├── web_search.py          # SearXNG thin client
-│   │   ├── terminal.py            # Sandbox exec thin client (admin-only)
-│   │   ├── wake_on_lan.py
-│   │   ├── proxmox.py
-│   │   └── home_assistant.py
-│   └── soul/
-│       ├── loader.py              # SOUL.md + DB → Markdown prompt
-│       └── templates/context.md.jinja
-│
-├── skills/                        # Skills Server (Go)
-│   ├── main.go
-│   └── handler/
-│
-├── sandbox/                       # Terminal skill exec env (FastAPI, isolated container)
-│   ├── exec_server.py
-│   └── Dockerfile
-│
-├── db/
-│   ├── SCHEMA.md
-│   └── migrations/*.sql
-│
-├── openspec/                      # OpenSpec workflow
-│   ├── specs/                     # Source-of-truth specifications
-│   │   ├── brain/spec.md
-│   │   ├── gateway/spec.md
-│   │   ├── identity/spec.md
-│   │   ├── llm/spec.md
-│   │   ├── memory/spec.md
-│   │   ├── security/spec.md
-│   │   ├── skills/spec.md
-│   │   └── soul/spec.md
-│   └── changes/
-│       └── archive/               # Completed phase proposals/tasks
-│
-├── docs/                          # Legacy (deprecated, see openspec/)
-├── groups/                        # Family/homelab group configs
-├── memory/                        # PG data volume
-└── scripts/
-```
-
----
-
-## 5. Development Phases (All Complete)
-
-| Phase | Goal | Status |
-|-------|------|--------|
-| 1 | Go Gateway + PG Queue + StressManager skeleton | ✅ |
-| 2 | Python Brain + vendor SDK adapters + ModelRouter | ✅ |
-| 3 | Memory system + SoulLoader + stress diary | ✅ |
-| 3.5 | Telegram platform integration | ✅ |
-| 4 | Identity system + MCP Skills (WoL, Cockpit) | ✅ |
-| 4a | Dynamic ModelRouter + routing_config.json | ✅ |
-| 4b | File analysis + FileAnalyzer skill | ✅ |
-| 4c | Gemini OAuth integration (removed 2026-06-10, replaced by API Key) | ✅ |
-| 4d | Web search skill (self-hosted SearXNG) | ✅ |
-| 4e | Terminal skill (sandboxed exec, admin-only, allowlist) | ✅ |
-
-Phase history archived at `openspec/changes/archive/`.
+| Path | What |
+|------|------|
+| `gateway/` | The Senses (Go) — handlers per platform, `stress/`, `forwarder/`, `queue/` |
+| `brain/` | The Brain (Python) — `agent/`, `llm/` (ModelRouter + clients), `config/routing_config.json`, `memory/`, `skills/`, `soul/` |
+| `skills/` | Skills server (Go) |
+| `sandbox/` | Terminal skill exec env (isolated container) |
+| `db/` | `SCHEMA.md` + `migrations/*.sql` |
+| `openspec/` | `specs/<domain>/spec.md` (source of truth), `changes/`, `backlog/` |
+| `SOUL.md` | Cindy's soul (git-managed) |
+| `CLAUDE.md` / `GEMINI.md` | Per-agent supplements |
+| `docs/` | Legacy (deprecated, see `openspec/`) |
+| `groups/` | Family/homelab group configs |
+| `memory/` | PG data volume |
 
 ---
 
@@ -252,7 +168,7 @@ Phase history archived at `openspec/changes/archive/`.
 - **Use vendor SDKs.** anthropic, google-genai, openai — not LangChain wrappers.
 - **System prompt = Markdown.** Never raw JSON/SQL in prompt.
 - **OpenSpec workflow.** Use `openspec/` for all spec-driven changes.
-- **WIP limit (hard).** Maximum 1 active OpenSpec change at any time. `/opsx:propose` MUST refuse if `openspec list --json` shows ≥1 active change. No `--force` override. To start a new change, archive the current one first.
+- **WIP limit (hard).** Maximum 1 active OpenSpec change at any time. `propose` MUST refuse if `openspec list --json` shows ≥1 active change. No `--force` override. To start a new change, archive the current one first.
 
 ---
 
@@ -399,3 +315,10 @@ cp .env.example .env
 ```
 
 DB migrations auto-run from `db/migrations/*.sql` on first startup.
+
+### Testing
+No automated runner. Manual scripts (at repo root, one level above `omni-agent/`) + spec acceptance criteria:
+```bash
+python ../test_router.py    # ModelRouter routing
+python ../test_self_id.py   # Cross-platform identity
+```
