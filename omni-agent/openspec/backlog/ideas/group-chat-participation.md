@@ -36,7 +36,8 @@ Cindy 能加入家庭群組，在被點名或「隱性被問」（例：「誰�
    （如 `should_respond(msg, ctx) → p`，以校準機率對門檻）。後端候選：
    - Jev 雲端（TypeSafe AI，非自回歸、校準機率；宣稱 70–500ms、$0.042/1M input；新創、Waitlist，數字未獨立驗證）
    - 自架 Nimble（宣稱 Qwen3.5-9B 底座的開源 Jev 替代；2026-11-11 搜尋未證實存在）
-   - macOS 27 `fm serve`（OpenAI 相容，model=`system`；chrysoberyl 目前 26.7.3，27 仍 beta）
+   - ~~macOS 27 `fm serve`（OpenAI 相容，model=`system`）~~ **2026-11-13 排除**：chrysoberyl 已升 27.2.1，
+     但為國行 CH/A 硬體，`system`＝`deviceNotEligible`、`pcc` 亦不可用（Apple Intelligence 區域鎖，改地區無解）
    - 現有 LLM＋精簡 prompt（慢、無可信機率，但零新依賴）
    群組場景判斷失效可 fail-closed，故自架的離線弱點在此可接受（與 1:1 不同）。
 5. **成本**：每則群組訊息都要判斷，若走 ChatGPT 會吃與 admin 共用的 Plus 額度——判斷層選型的主要理由。
