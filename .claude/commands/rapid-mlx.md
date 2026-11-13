@@ -1,10 +1,10 @@
-管理 chrysoberyl（100.88.136.117）上的 rapid-mlx 服務。
+管理 chrysoberyl（192.168.68.77）上的 rapid-mlx 服務。
 
 ## 基本資訊
 
 | 項目 | 值 |
 |------|-----|
-| SSH | `ssh 100.88.136.117` |
+| SSH | `ssh 192.168.68.77` |
 | Port | 8000 |
 | Model | gemma-4-26b-4bit（`--mllm --no-thinking`） |
 | 管理方式 | launchd plist |
@@ -19,7 +19,7 @@
 ### status（預設）
 
 ```bash
-ssh 100.88.136.117 "curl -s http://localhost:8000/health; echo; ps aux | grep rapid-mlx | grep -v grep | awk '{print \"PID:\", \$2, \"CPU:\", \$3\"%%\", \"MEM:\", \$4\"%%\"}'"
+ssh 192.168.68.77 "curl -s http://localhost:8000/health; echo; ps aux | grep rapid-mlx | grep -v grep | awk '{print \"PID:\", \$2, \"CPU:\", \$3\"%%\", \"MEM:\", \$4\"%%\"}'"
 ```
 
 回報：healthy/not running、model_loaded、PID、CPU/MEM 使用率。
@@ -27,13 +27,13 @@ ssh 100.88.136.117 "curl -s http://localhost:8000/health; echo; ps aux | grep ra
 ### stop
 
 ```bash
-ssh 100.88.136.117 "launchctl unload ~/Library/LaunchAgents/com.icekimo.rapid-mlx.plist"
+ssh 192.168.68.77 "launchctl unload ~/Library/LaunchAgents/com.icekimo.rapid-mlx.plist"
 ```
 
 ### start
 
 ```bash
-ssh 100.88.136.117 "launchctl load ~/Library/LaunchAgents/com.icekimo.rapid-mlx.plist"
+ssh 192.168.68.77 "launchctl load ~/Library/LaunchAgents/com.icekimo.rapid-mlx.plist"
 ```
 
 ### restart
@@ -45,19 +45,19 @@ ssh 100.88.136.117 "launchctl load ~/Library/LaunchAgents/com.icekimo.rapid-mlx.
 顯示最後 n 行（預設 50）：
 
 ```bash
-ssh 100.88.136.117 "tail -n 50 ~/Library/Logs/rapid-mlx.log"
+ssh 192.168.68.77 "tail -n 50 ~/Library/Logs/rapid-mlx.log"
 ```
 
 如有 `--err`，改看 stderr log：
 
 ```bash
-ssh 100.88.136.117 "tail -n 50 ~/Library/Logs/rapid-mlx.err.log"
+ssh 192.168.68.77 "tail -n 50 ~/Library/Logs/rapid-mlx.err.log"
 ```
 
 ### version
 
 ```bash
-ssh 100.88.136.117 "rapid-mlx --version 2>/dev/null || /opt/homebrew/bin/rapid-mlx --version"
+ssh 192.168.68.77 "rapid-mlx --version 2>/dev/null || /opt/homebrew/bin/rapid-mlx --version"
 ```
 
 ## 已知注意事項
