@@ -225,10 +225,17 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
   單次呼叫 p50 約 5s（agent_node 5.0s），pdf_summary 44.5s、image_vision 25.7s 為長尾。
   gemini/gemini-2.5-flash 9 次全為 `analyze_video_url`（設計上直呼 Gemini，非 fallback），in 685k tokens（cache read 185k）；claude 0 次。
 - brain log（容器 11-11 起）：`Fallback triggered` 0、token refresh 9、`engines unresponsive` 0。
-- 花費：**仍未讀數**（AI Studio／Anthropic Console／ChatGPT Usage，第三次未記）。Gemini 本窗口有影片分析用量（≈685k in tokens），
-  AI Studio 餘額是 Task 6「是否開 auto-reload」的必要輸入。
+- 花費：
+  - **AI Studio（Gemini API，Project Omni Agent，All API Keys，10-18～11-14 PDT）：NT$8.33（≈US$0.26）**。
+    計價幣別為台幣（Monthly spend cap 卡片標 NT$；本月 11-01 起 NT$6.33，與 11-10～11-13 長條加總吻合，故總額的「$」亦為 NT$）。
+    日分布（圖表目測）：10 月 ≈NT$2.0；11-10～11-13 ≈NT$6.3（11-11 峰值 ≈NT$3.6，影片分析）。
+    與 `llm_usage` gemini 9 次 `analyze_video_url`（≈685k in tokens）量級一致。Tier 1、未開 auto-reload、未設 spend cap；
+    以此用量 10-26 儲值額度遠未用罄。
+  - Anthropic：0（`llm_usage` claude 0 次；admin 確認無用量）。
+  - ChatGPT：網頁 Usage 顯示 0，疑非 SIWC 用量所在頁面（待查）。走 Plus 月費、無邊際花費；用量以 `llm_usage` 為準
+    （11-06 起 153 次、in ≈966k／out ≈33k tokens）。
 - **Task 6 素材小結**：可靠性連續三次 0 failed／0 fallback；延遲是唯一代價，且非附件專屬，主要來自每 turn 多次 LLM 往返。
-  決定前缺：三處花費讀數。
+  Gemini 花費可忽略（28 天 NT$8.33）→ auto-reload 不需開。花費面無阻礙；剩 ChatGPT Plus 額度餘裕待確認。
 - 下次紀錄：2026-11-19（或於 Task 6 決定時一併結案）。
 
 ### Task 5：ChatGPT Plus 接入（Sign in with ChatGPT，主力 provider）
