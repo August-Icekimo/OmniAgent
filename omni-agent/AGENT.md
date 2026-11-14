@@ -1,7 +1,7 @@
 # Omni-Agent — Engineering Constitution
 
 > Core guide for all AI agents working on this project.
-> Read fully before any architectural change. No exceptions.
+> Read fully before any architectural change.
 
 ---
 
@@ -10,7 +10,7 @@
 **Omni-Agent** = HomeLab family AI assistant named **Cindy**.
 Role: family butler / household manager. Serves entire family, not single user.
 
-Personality defined in `SOUL.md`. Read it. Internalize it.
+Cindy's personality is defined in `SOUL.md`, which `brain/soul/loader.py` renders into her runtime system prompt. Read it when working on tone, prompts, or soul features.
 
 ---
 
@@ -130,7 +130,7 @@ Full DDL in `db/migrations/`. Reference `db/SCHEMA.md`.
 | `line_accounts` | LINE ID → user mapping |
 | `telegram_accounts` | Chat ID → user mapping |
 | `conversations` | Recent dialogue (JSONB array) |
-| `memory_embeddings` | pgvector semantic memory (vector 1536) |
+| `memory_embeddings` | pgvector semantic memory (vector 768) |
 | `message_queue` | SKIP LOCKED queue (priority, status, stress_level) |
 | `stress_logs` | Cerebellum diary (level, metrics, mood) |
 | `home_context` | Device/environment state (JSONB, active flag) |
@@ -199,6 +199,8 @@ openspec/
 | `apply`   | Implement tasks from a change. |
 | `archive` | Archive completed change, sync delta specs. |
 
+Invocation: `/opsx-<cmd>` in Claude Code and Antigravity, `/opsx:<cmd>` in Gemini CLI. The `/opsx:` forms below are Gemini's.
+
 ### Spec Domains
 8 domains: `brain`, `gateway`, `identity`, `llm`, `memory`, `security`, `skills`, `soul`.
 
@@ -254,7 +256,7 @@ openspec/backlog/
 
 - **Length**: 2 weeks
 - **Naming**: `<YYYY>-W<NN>.md` (ISO week, e.g. `2026-W17.md`)
-- **Window**: Monday → Sunday + 13 days
+- **Window**: Monday of the current ISO week → Sunday of the following week (start + 13 days)
 - **Retro**: Filled manually at sprint end. `/opsx:plan` blocks until prior retro present.
 - **No /opsx:retro command yet** — future enhancement, hook position reserved.
 
@@ -317,7 +319,7 @@ cp .env.example .env
 DB migrations auto-run from `db/migrations/*.sql` on first startup.
 
 ### Testing
-No automated runner. Manual scripts (at repo root, one level above `omni-agent/`) + spec acceptance criteria:
+Gateway: Go unit tests (`cd gateway && go test ./...`). Brain: no automated runner — manual scripts (at repo root, one level above `omni-agent/`) + spec acceptance criteria:
 ```bash
 python ../test_router.py    # ModelRouter routing
 python ../test_self_id.py   # Cross-platform identity
