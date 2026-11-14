@@ -232,7 +232,8 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
     與 `llm_usage` gemini 9 次 `analyze_video_url`（≈685k in tokens）量級一致。Tier 1、未開 auto-reload、未設 spend cap；
     以此用量 10-26 儲值額度遠未用罄。
   - Anthropic：0（`llm_usage` claude 0 次；admin 確認無用量）。
-  - ChatGPT：網頁 Usage 顯示 0，疑非 SIWC 用量所在頁面（待查）。走 Plus 月費、無邊際花費；用量以 `llm_usage` 為準
+  - ChatGPT：官方指定頁面（chatgpt.com/settings/usage），走 Codex 額度；顯示 0 原因不明（SIWC 仍為 preview）。
+    走 Plus 月費、無邊際花費；用量以 `llm_usage` 為準
     （11-06 起 153 次、in ≈966k／out ≈33k tokens）。
 - **Task 6 素材小結**：可靠性連續三次 0 failed／0 fallback；延遲是唯一代價，且非附件專屬，主要來自每 turn 多次 LLM 往返。
   Gemini 花費可忽略（28 天 NT$8.33）→ auto-reload 不需開。花費面無阻礙；剩 ChatGPT Plus 額度餘裕待確認。
@@ -335,6 +336,11 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 - [ ] turn 成功率與延遲不劣於預期；月花費在 admin 可接受範圍
 - [ ] 決定「退役」／「延長觀察」／「保留 local 某角色」，寫入本文件；Gemini 是否開 auto-reload 一併決定
 - [ ] ChatGPT 主力期間的額度消耗是否影響 admin 個人使用，決定是否需要 per-app 週上限（ChatGPT Settings → Usage）
+
+**額度考量（2026-11-14 補記）：** SIWC 用量計入 Codex 額度；據 admin 所知，OpenAI 未來可能讓 ChatGPT 對話與 Codex 共用額度（未查證）。
+admin 幾乎不用對話、寫程式主力非 Codex，現階段影響小；**家人帳號上線後流量倍增，須重新評估額度是否足夠**。
+撞到上限時回 429 `subscription_sharing_usage_limit_exceeded`，`chatgpt_client` 不重試、交 router fallback 到 Gemini（成本可忽略，見觀察 #3），
+最差情況為延遲／品質降為 Gemini 水準，不會斷線。SIWC 無剩餘額度 header 或 API，額度狀態只能從 429 次數（`llm_usage.error_type`）間接觀察。
 
 ### Task 7：移除 local provider 程式碼（階段 3，視 Task 6 結論）
 **說明：** 移除 local 及其周邊，含 Gemma 專屬 workaround 與升級路徑（連帶消除 `_perceive_image` bug）。
