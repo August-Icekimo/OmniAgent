@@ -197,6 +197,40 @@ functionResponse 回填 → gemini 依工具結果產出最終回覆（「沒有
 - 花費：仍未讀數（AI Studio／Anthropic Console／ChatGPT Usage）。
 - 下次紀錄：2026-11-12。
 
+**#3 — 2026-11-14（原訂 11-12，遲 2 天；範圍 11-06～11-14，Asia/Taipei）**
+
+| 日期 | delivered | failed | cancelled | 延遲 p50 | 延遲 max |
+|---|---|---|---|---|---|
+| 11-06 | 7 | 0 | 0 | 39.0s | 92.0s |
+| 11-07 | 3 | 0 | 0 | 61.0s | 62.0s |
+| 11-08 | 1 | 0 | 0 | 87.0s | 87.0s |
+| 11-10 | 13 | 0 | 0 | 17.0s | 130.0s |
+| 11-11 | 3 | 0 | 0 | 59.0s | 69.0s |
+| 11-12 | 6 | 0 | 0 | 83.0s | 94.0s |
+| 11-13 | 1 | 0 | 0 | 25.0s | 25.0s |
+
+- 共 34 turn 全數 delivered（0 failed、0 cancelled、0 undeliverable）；仍只有 admin 一人（單一 user_id）。
+- **附件／純文字拆分**（依 `message_queue.turn_id` 關聯，含 attachment 或非 text message_type 即算附件）：
+
+  | 類型 | turns | 延遲 p50 | 延遲 max |
+  |---|---|---|---|
+  | 附件（image 3、voice 2、file 1） | 6 | 56.5s | 92.0s |
+  | 純文字 | 28 | 48.5s | 130.0s |
+
+  → #2 推測「延遲上升來自附件」**不成立**：純文字 p50 也近 50s。agent_node 93 次呼叫／34 turn ≈ 每 turn 2.7 次，
+  多輪 tool-call（web_fetch、analyze_video_url 等本窗口新工具）是較可能的主因；llm_usage 無 turn_id，無法逐 turn 歸因。
+  11-10 p50 17s 為 reply-quick-options 按鈕確認往返的短 turn 拉低。
+- `llm_usage`（11-06 起）：chatgpt/gpt-6.1-sol 153 次、**0 failed、0 fallback**
+  （agent_node 93、unknown 46、reporter_node_perception 4、image_ocr 3、image_ocr_eval 3、image_vision 3、pdf_summary 1）；
+  單次呼叫 p50 約 5s（agent_node 5.0s），pdf_summary 44.5s、image_vision 25.7s 為長尾。
+  gemini/gemini-2.5-flash 9 次全為 `analyze_video_url`（設計上直呼 Gemini，非 fallback），in 685k tokens（cache read 185k）；claude 0 次。
+- brain log（容器 11-11 起）：`Fallback triggered` 0、token refresh 9、`engines unresponsive` 0。
+- 花費：**仍未讀數**（AI Studio／Anthropic Console／ChatGPT Usage，第三次未記）。Gemini 本窗口有影片分析用量（≈685k in tokens），
+  AI Studio 餘額是 Task 6「是否開 auto-reload」的必要輸入。
+- **Task 6 素材小結**：可靠性連續三次 0 failed／0 fallback；延遲是唯一代價，且非附件專屬，主要來自每 turn 多次 LLM 往返。
+  決定前缺：三處花費讀數。
+- 下次紀錄：2026-11-19（或於 Task 6 決定時一併結案）。
+
 ### Task 5：ChatGPT Plus 接入（Sign in with ChatGPT，主力 provider）
 **說明：** 依官方 OSS／self-hosted 流程（developers.openai.com/siwc/token-sharing-open-source，2026-10-26 讀取）
 把 admin 的 ChatGPT Plus 接成主力 provider。關鍵約束（官方 Preview limitations）：
@@ -367,3 +401,4 @@ brain 重建後 preflight `chatgpt/gpt-6.1-sol` OK。容器內 smoke：純文字
 | 1.10 | 2026-10-29 | Task 5 重啟免登入 AC 通過；file_analyzer 寫死 gemini 三處先行改走預設 provider |
 | 1.11 | 2026-10-29 | Testing Notes 新增 llm_usage 用量查詢（idea llm-usage-accounting） |
 | 1.12 | 2026-11-05 | 觀察紀錄 #2（W44 retro 補記）；評估基準改為 admin 使用（家人目前未使用） |
+| 1.13 | 2026-11-14 | 觀察紀錄 #3：拆分附件／純文字延遲（附件非主因）；花費仍未讀數 |
